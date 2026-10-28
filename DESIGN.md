@@ -6,7 +6,8 @@
 > ehtimoli belgilaydi.
 
 Holat: 2026-10-28. M0 (yadro g'oya isboti) va M1 (fused Triton engine, ko'p kamera) bajarildi va
-o'lchandi (5 va 5b bo'limlar).
+o'lchandi (5 va 5b bo'limlar). 2-tadqiqot raundidan keyin **halo-zero** arxitekturasi taklif qilindi
+va CPU'da isbotlandi (5c bo'lim). Uning aniqlikka ta'siri GPU ablation'da tekshiriladi.
 
 ---
 
@@ -220,6 +221,121 @@ ta'siri M3'da o'lchanadi.
   GOP'da (1–2 s) bitta dense kadr kerak bo'ladi.
 - Haqiqiy video (statik kamerali ochiq datasetlar) bilan qayta o'lchash.
 - Jetson'da o'lchash. U yerda dense qimmat, shuning uchun foyda kattaroq bo'lishi kutiladi.
+
+## 5c. 2-tadqiqot raundi va yangi arxitektura qarori (2026-10-28, GPU'siz)
+
+### Asosiy kashfiyot: halo-zero yuqori rezolyutsiya bosqichlari
+
+**Muammo.** M0/M1 engine'ida o'zgarish receptive radius (55 px) bo'yicha qo'shni bloklarga
+tarqaladi. Natijada kadrning 0.24%i o'zgarsa ham GPU ishining 2.6%i bajariladi.
+
+**Yechim.** Stride ≤ 8 bosqichlarida har bir 32 px blok **mustaqil** kodlanadi: bloklar batch
+o'lchamiga aylantiriladi va conv'lar blok chegarasida nol bilan padding qiladi. Bloklararo kontekst
+faqat dense yadroda (stride 16/32) va top-down fusion orqali beriladi. Bu ViT'ning o'zaro
+kesishmaydigan patchify qadamining CNN analogi; RF-DETR va LW-DETR shu tamoyilda ishlaydi.
+
+**Afzalliklari:**
+- Sparse yangilash aniq bo'lib qoladi va soddalashadi: faqat o'zgargan bloklar qayta kodlanadi,
+  hech qanday dilatsiya kerak emas.
+- Maxsus yadro kerak emas, chunki bloklar batch qilinib oddiy cuDNN'dan o'tadi.
+- Halo qismini takror hisoblash isrofi ham yo'qoladi.
+
+**Isbotlar:**
+- `sarbon/models/block_local.py` + `tests/test_block_local.py` (CPU): sparse yangilash natijasi
+  **bitma-bit** bir xil (xato 0.0), kodlangan bloklar soni = o'zgargan bloklar soni.
+- `bench/analyze_gating.py` (CPU, FLOP bilan og'irlangan GPU ishi, 1080p):
+
+| Sahna | O'zgargan piksel | Hozirgi (block-level) | Cell-level 8 px (aniq) | **Halo-zero** |
+|---|---|---|---|---|
+| tinch | 0.24% | 2.6% | 1.9% (−29%) | **0.6% (4.3x kam)** |
+| o'rta | 1.32% | 9.8% | 7.4% (−25%) | **2.6% (3.8x kam)** |
+| band | 16.1% | 38.2% | 33.2% (−13%) | **21.6% (1.8x kam)** |
+
+**Ochiq savol:** blok chegaralari aniqlikka qancha zarar qiladi? Buni faqat o'qitish ko'rsatadi.
+- Tajriba tayyor: `experiments/halo_zero_ablation.py`. Bitta CenterNet-uslub detektor ikki xil stem bilan
+  o'qitiladi, qolgan hamma narsa bir xil.
+- **Qaror qoidasi:** AP pasayishi ≤ 1.0 va AP_small pasayishi ≤ 1.5 bo'lsa, halo-zero qabul qilinadi.
+  Aks holda cell-level gating bilan halo engine'da qolinadi (u ham aniq, ham 25–29% tejaydi).
+
+### Ma'lumotlar (litsenziya, tijoriy foydalanish)
+
+- **Pretraining:**
+  - Open Images V7: annotatsiyalar CC BY 4.0, rasmlar CC BY 2.0. Har rasmning attributsiyasi saqlanadi.
+  - COCO: faqat CC BY, CC BY-SA, "no known copyright" va US Gov litsenziyali rasmlar.
+    `sarbon/data/coco.py` buni avtomatik filtrlaydi.
+- **Statik kamera fine-tune/eval:**
+  1. NVIDIA PhysicalAI-SmartSpaces: CC BY 4.0, sintetik, ~1800 statik kamera, track ID'lari bor.
+  2. MEVA: CC BY 4.0, haqiqiy statik kuzatuv kameralari, EO va IR, kichik obyektlar.
+  3. VIRAT: tijoriy foydalanish ruxsat etilgan, lekin Kitware kelishuvni bekor qilish huquqini saqlaydi.
+     Undan foydalanishdan oldin yozma tasdiq olish kerak.
+  4. O'zingizning kameralaringiz.
+- **Ishlatmaymiz:** MOT17/20, CrowdHuman, Objects365, SA-1B, DanceTrack, SportsMOT, SODA, AI City
+  (haqiqiy qismi), MOTSynth/GTA, UA-DETRAC, WILDTRACK.
+- **Sintetik data** yaxshi yo'l: statik kamera eng oson holat.
+  - Vosita: Blender (chiqish sizniki) yoki Isaac Sim.
+  - Asset'lar: CC0 yoki sotib olingan bo'lishi kerak.
+  - Unreal/Epic asset'larini AI o'qitishda ishlatmaymiz (EULA cheklovlari).
+
+### Kodek orqali "tekin" gate (H.264/H.265)
+
+- "Skip blok = o'zgarmagan" qoidasi **faqat shartlar bajarilganda** bitma-bit to'g'ri:
+  - MV aynan (0,0) bo'lishi kerak. H.264 P_Skip'da MV bashorat qilinadi va doim ham nol emas.
+  - Reference oldingi kadr bo'lishi kerak.
+  - Residual bo'lmasligi kerak.
+  - Weighted prediction o'chiq bo'lishi kerak.
+  - HEVC'da shu CTB uchun SAO o'chiq bo'lishi kerak.
+  - Deblocking qo'shni bloklar chegarasidan ~3 px gacha ta'sir qiladi, shuning uchun maskani 4 px
+    dilatsiya qilish kerak.
+- **Hikvision H.265+ tuzog'i:** skip "fon kadriga teng" degani bo'lishi mumkin (long-term reference).
+  Shuning uchun reference index'ni tekshirish shart.
+- **NVDEC MV yoki MB turlarini bermaydi.** FFmpeg software dekoder MV'larni faqat H.264 uchun eksport
+  qiladi va unda skip yoki cbp bayrog'i yo'q. Demak, FFmpeg'ga kichik patch kerak bo'ladi.
+- **Xulosa:** NVDEC'dan keyin GPU'dagi piksel farqi deyarli tekin, ya'ni o'tkazuvchanlik muammo emas.
+  Kodekning asosiy foydasi chegarasiz aniqlik.
+  - Birinchi qadam: kameralaringizda kunduzi va kechasi skip ulushini o'lchash.
+  - Ulush kechasi past bo'lsa (shovqin), foyda kichik bo'ladi.
+  - Ustuvorligi past, M6'dan keyin.
+
+### Yangi, sinaladigan g'oyalar (prior art bo'yicha tekshirilgan)
+
+Eng yaqin oldingi ishlar: CaTDet (1810.00434, tracker ROI tanlaydi) va FOVEA (2108.12102). Ular
+albatta iqtibos qilinishi kerak. Exact delta-sparse conv + track-query DETR + track feedback
+kombinatsiyasi topilmadi.
+
+1. **Halo-zero stem** (yuqorida). *Test:* ablation, mezon AP ≤ −1.0.
+2. **Staleness-age embedding.** Har blok uchun "oxirgi qayta hisoblangandan beri o'tgan kadrlar" soni
+   stride-16 tokenlarga va cross-attention'ga beriladi (StreamPETR'ning motion-aware LN uslubida).
+   *Test:* tau > 0 holatida dense va stale o'rtasidagi AP farqining ≥50%ini yopishi kerak.
+3. **O'rganiladigan staleness-kritik.** Kichik MLP blokdagi o'zgarish, blok yoshi, eng yaqin track'gacha
+   masofa va track kovariansiyasi asosida detection loss qancha oshishini bashorat qiladi. Bloklar
+   FLOP byudjetigacha ochko'z (greedy) tanlanadi.
+   *Test:* teng byudjetda oddiy threshold'dan HOTA va AP_s yuqori bo'lishi kerak.
+4. **Track-query decoder early-exit.** Track'ning box hududida qayta hisoblangan blok bo'lmasa va
+   harakat dispersiyasi past bo'lsa, track query faqat oxirgi decoder qatlamidan o'tadi.
+   *Test:* decoder FLOP'lari 50% kam bo'lganda HOTA ≤ 0.5 pasayishi kerak.
+5. **Track-driven NWD + zichlik kvotasi.** Hungarian matching cost'iga NWD qo'shiladi. Kichik track'lar
+   yonida stride-4/8 tokenlar uchun query slotlari zaxiralanadi. DETR matching'da NWD ishlatilgan ish
+   topilmadi.
+   *Test:* AI-TOD-v2 va VisDrone-MOT'da AP_vt va AP_t.
+
+Approximate rejim uchun o'qitish retsepti:
+- Reference'ga nisbatan gating qilinadi (oldingi kadrga emas, Eventful uslubida), shunda drift to'planmaydi.
+- O'qitishda staleness aniq simulyatsiya qilinadi: t−k va t kadrlar feature'lari deploy qoidasi bilan
+  splice qilinadi, `tau` har batch'da tasodifiy tanlanadi.
+- Stride 16'da distillyatsiya loss'i qo'shiladi.
+
+Treking uchun:
+- MOTIP (Apache-2.0, ID classification) asos sifatida eng mos.
+- CO-MOT'ning COLA usuli va MATR'ning motion update'i arzon yutuq beradi.
+- Track'ning tug'ilishi va o'limi uchun histerezis bilan ikki chegara ishlatiladi.
+
+### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
+
+1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
+2. Halo-zero ablation o'tkaziladi. Dataset kerak: COCO 2017 (~19 GB, foydalanuvchi ruxsati bilan
+   yuklanadi). 6 klass, faqat tijoriy litsenziyali rasmlar, 640 px, 24 epoxa, ikkala variant uchun.
+3. Halo-zero cache'ni GPU'da o'lchash: `nonzero_static` + CUDA graph, 16 kamera, M1 bilan solishtirish.
+4. Cell-level gating fused engine'ga qo'shiladi (halo-zero qabul qilinmasa).
 
 ## 6. Yo'l xaritasi (har bosqichda o'lchanadigan mezon)
 
