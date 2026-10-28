@@ -23,7 +23,7 @@ from pycocotools.cocoeval import COCOeval
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sarbon.data.coco import CocoDetection, SyntheticDetection, collate  # noqa: E402
+from sarbon.data.coco import CocoDetection, SyntheticDetection, TargetCollate, collate  # noqa: E402
 from sarbon.models.proxy_detector import (STRIDE, ProxyDetector, build_targets, decode,  # noqa: E402
                                           detection_loss)
 
@@ -98,8 +98,10 @@ def main():
         val_ds = CocoDetection(args.coco, "val2017", args.size, train=False, commercial_only=False)
         num_classes, size = len(train_ds.cat_ids), args.size
     print(f"train images {len(train_ds)} (commercial licenses only), val {len(val_ds)}")
+    out_h = out_w = size // STRIDE
     train_dl = DataLoader(train_ds, args.batch, shuffle=True, num_workers=args.workers,
-                          collate_fn=collate, drop_last=True, pin_memory=device.type == "cuda",
+                          collate_fn=TargetCollate(build_targets, num_classes, out_h, out_w),
+                          drop_last=True, pin_memory=device.type == "cuda",
                           persistent_workers=args.workers > 0)
     val_dl = DataLoader(val_ds, args.batch, num_workers=args.workers, collate_fn=collate)
 
@@ -111,14 +113,12 @@ def main():
     warm = min(500, steps // 10)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda i: min(1, (i + 1) / max(1, warm)) * 0.5 * (1 + math.cos(math.pi * i / steps)))
-    out_h = out_w = size // STRIDE
     out_dir = Path(args.out) / args.variant
     out_dir.mkdir(parents=True, exist_ok=True)
     log, t0 = [], time.time()
     for ep in range(args.epochs):
-        for it, (imgs, boxes, labels, _) in enumerate(train_dl):
-            tg = [build_targets(b, l, num_classes, out_h, out_w) for b, l in zip(boxes, labels)]
-            heat, reg, mask = (torch.stack(x).to(device, non_blocking=True) for x in zip(*tg))
+        for it, (imgs, heat, reg, mask, _) in enumerate(train_dl):
+            heat, reg, mask = (x.to(device, non_blocking=True) for x in (heat, reg, mask))
             with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
                 hp, rp = model(prep(imgs, device))
             loss, parts = detection_loss(hp, rp, heat, reg, mask)

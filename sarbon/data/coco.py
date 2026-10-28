@@ -120,3 +120,16 @@ class SyntheticDetection(Dataset):
 def collate(batch):
     imgs = torch.stack([b[0] for b in batch])
     return imgs, [b[1] for b in batch], [b[2] for b in batch], [b[3] for b in batch]
+
+
+class TargetCollate:
+    """Collate that also renders dense targets, so it runs inside DataLoader workers."""
+
+    def __init__(self, build, num_classes, out_h, out_w):
+        self.build, self.args = build, (num_classes, out_h, out_w)
+
+    def __call__(self, batch):
+        imgs, boxes, labels, meta = collate(batch)
+        tg = [self.build(b, l, *self.args) for b, l in zip(boxes, labels)]
+        heat, reg, mask = (torch.stack(x) for x in zip(*tg))
+        return imgs, heat, reg, mask, meta

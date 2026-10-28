@@ -65,16 +65,20 @@ def build_targets(boxes, labels, num_classes, out_h, out_w):
     heat = torch.zeros(num_classes, out_h, out_w)
     reg = torch.zeros(4, out_h, out_w)
     mask = torch.zeros(out_h, out_w, dtype=torch.bool)
-    ys, xs = torch.meshgrid(torch.arange(out_h), torch.arange(out_w), indexing="ij")
     for (x0, y0, x1, y1), c in zip(boxes.tolist(), labels.tolist()):
         w, h = (x1 - x0) / STRIDE, (y1 - y0) / STRIDE
         if w <= 0 or h <= 0:
             continue
         cx, cy = (x0 + x1) / 2 / STRIDE, (y0 + y1) / 2 / STRIDE
-        ix, iy = min(int(cx), out_w - 1), min(int(cy), out_h - 1)
+        ix = min(max(int(cx), 0), out_w - 1)
+        iy = min(max(int(cy), 0), out_h - 1)
         sigma = max(gaussian_radius(w, h), 0.5) / 3 + 0.3
-        g = torch.exp(-((xs - ix) ** 2 + (ys - iy) ** 2) / (2 * sigma ** 2))
-        heat[c] = torch.maximum(heat[c], g)
+        r = int(3 * sigma) + 1  # draw only the local window (fast enough for loader workers)
+        ya, yb, xa, xb = max(0, iy - r), min(out_h, iy + r + 1), max(0, ix - r), min(out_w, ix + r + 1)
+        yy = torch.arange(ya, yb).view(-1, 1) - iy
+        xx = torch.arange(xa, xb).view(1, -1) - ix
+        g = torch.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
+        heat[c, ya:yb, xa:xb] = torch.maximum(heat[c, ya:yb, xa:xb], g)
         reg[:, iy, ix] = torch.tensor([w, h, cx - ix, cy - iy])
         mask[iy, ix] = True
     return heat, reg, mask
