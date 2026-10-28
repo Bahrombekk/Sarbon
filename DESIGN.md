@@ -329,6 +329,36 @@ Treking uchun:
 - CO-MOT'ning COLA usuli va MATR'ning motion update'i arzon yutuq beradi.
 - Track'ning tug'ilishi va o'limi uchun histerezis bilan ikki chegara ishlatiladi.
 
+### Sarbon detektori: birinchi to'liq versiya (CPU'da tekshirilgan)
+
+`sarbon/models/sarbon_det.py` modeli quyidagi qismlardan iborat:
+- **Stem:** halo-zero `BlockLocalStem`.
+- **Dense yadro:** stride 16/32 bosqichlari, AIFI attention (faqat stride 32'da), top-down va
+  bottom-up fusion. Fusion yengil: 1×1 conv, keyin 3×3 depthwise.
+- **Query tanlash:** RT-DETR uslubida, encoder top-K bo'yicha.
+- **Decoder:** box-relative multi-scale deformable attention (`deform_attn.py`, sof PyTorch) va
+  iterativ box refinement. NMS ishlatilmaydi.
+- **Track query'lar:** oldingi kadrning `embed`/`boxes` chiqishlari keyingi kadrga query bo'lib qaytadi.
+
+`criterion.py`:
+- Hungarian matcher: cost = focal + L1 + GIoU, NWD opsional.
+- Track query'lar Hungarian'ga kirmaydi, o'z ID'siga qat'iy biriktiriladi (MOTR uslubi).
+- Loss: focal + L1 + GIoU. Har decoder qatlamida va encoder proposal'larida hisoblanadi.
+
+| Model | Parametr | Decoder | Query |
+|---|---|---|---|
+| Sarbon-N | 3.9M | 3 qatlam, d=128 | 150 |
+| Sarbon-S | 12.8M | 4 qatlam, d=256 | 300 |
+| Sarbon-M | 24.9M | 6 qatlam, d=256 | 300 |
+
+`tests/test_sarbon_det.py` (CPU) natijalari:
+- Forward va backward ishlaydi.
+- Kichik batch yodlab olindi: loss 23 → 0.3, har obyekt IoU 0.95–0.98.
+- Track query qadami: ID'lar saqlanadi.
+
+Hali yo'q, keyingi navbatda: D-FINE FDR regressiya, kontrastiv denoising (CDN), DEIM Dense O2O,
+foveal yo'l, klip bo'yicha video o'qitish va staleness simulyatsiyasi.
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
