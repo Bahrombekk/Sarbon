@@ -130,6 +130,7 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--nwd", type=float, default=0.0, help="NWD weight in the matching cost")
     ap.add_argument("--no-halo-zero", action="store_true")
+    ap.add_argument("--limit", type=int, default=None, help="use only N train/val images (smoke tests)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/sarbon")
     args = ap.parse_args()
@@ -144,17 +145,22 @@ def main():
     else:
         size = args.img
         classes = ALL if args.benchmark else SURVEILLANCE
-        base = CocoDetection(args.coco, "train2017", size, classes, commercial_only=not args.benchmark)
-        val_ds = CocoDetection(args.coco, "val2017", size, classes, commercial_only=False, train=False)
+        base = CocoDetection(args.coco, "train2017", size, classes, commercial_only=not args.benchmark,
+                             limit=args.limit)
+        val_ds = CocoDetection(args.coco, "val2017", size, classes, commercial_only=False, train=False,
+                               limit=args.limit)
         num_classes = len(base.cat_ids)
     train_ds = MosaicDetection(base, prob=0.5)
     print(f"train {len(base)} images, val {len(val_ds)}, classes {num_classes}, "
           f"{'benchmark (research only)' if args.benchmark else 'commercial'}")
+    # persistent workers: on Windows every respawn re-imports torch (~1 min) and repeated
+    # respawns exhausted the commit limit (WinError 1114 loading shm.dll)
     mk = lambda: DataLoader(train_ds, args.batch, shuffle=True, num_workers=args.workers,  # noqa: E731
                             collate_fn=collate, drop_last=True, pin_memory=device.type == "cuda",
-                            persistent_workers=False)
+                            persistent_workers=args.workers > 0)
     train_dl = mk()
-    val_dl = DataLoader(val_ds, args.batch, num_workers=args.workers, collate_fn=collate)
+    val_dl = DataLoader(val_ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
+                        persistent_workers=args.workers > 0)
 
     model = build(args.size, num_classes, halo_zero=not args.no_halo_zero).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
@@ -171,7 +177,8 @@ def main():
     for ep in range(args.epochs):
         if ep == args.epochs - args.no_aug_epochs:
             train_ds.prob = 0.0
-            train_dl = mk()  # workers must see the new prob
+            del train_dl  # shut the old workers down before starting ones that see prob = 0
+            train_dl = mk()
         model.train()
         for it, (imgs, boxes, labels, _) in enumerate(train_dl):
             targets = to_targets(boxes, labels, size, device)

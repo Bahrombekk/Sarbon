@@ -1,4 +1,4 @@
-"""Set matching and losses for the Sarbon detector.
+"""Set matching and losses for the Sarbon detector (vectorised over the batch).
 
 Matching cost = focal class cost + L1 + (-GIoU) [+ (1 - NWD) for small objects].
 Track queries (indices [0, T)) never enter the Hungarian step: each one is bound to
@@ -9,13 +9,19 @@ Losses, on every decoder layer, the pre-box layer and the encoder proposals:
 - boxes: L1 + GIoU, plus FGL (D-FINE): per-edge distribution focal loss towards the
   two bins around the target edge, weighted by IoU;
 - DDF (D-FINE's GO-LSD): earlier layers' edge distributions distil from the final one.
+
+Speed: one cost matrix per layer for the whole batch, one device->host copy for the
+Hungarian step, and every loss computed with a single gather over all matches (the
+per-image Python loops cost ~17k kernel launches per step before).
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
-from .box_ops import bbox2distance, box_iou, cxcywh_to_xyxy, generalized_box_iou, nwd
+from .box_ops import aligned_giou, bbox2distance, cxcywh_to_xyxy, generalized_box_iou, nwd
+
+EMPTY = torch.empty(0, dtype=torch.long)
 
 
 class HungarianMatcher(nn.Module):
@@ -30,31 +36,37 @@ class HungarianMatcher(nn.Module):
 
         fixed: optional per-image list of (query_idx, gt_idx) pairs decided beforehand
         (track queries). Queries [0, skip) are excluded from the Hungarian step.
-        Returns per-image (query_idx, gt_idx) LongTensors.
+        Returns per-image (query_idx, gt_idx) CPU LongTensors.
         """
-        out = []
-        for i, t in enumerate(targets):
-            fq, fg = (fixed[i] if fixed else (torch.empty(0, dtype=torch.long),) * 2)
-            n_gt = len(t["labels"])
-            free_gt = torch.ones(n_gt, dtype=torch.bool)
-            free_gt[fg] = False
-            gt_idx = free_gt.nonzero()[:, 0]
-            q_idx = torch.arange(skip, logits.shape[1])
-            if len(gt_idx) == 0:
-                out.append((fq, fg))
-                continue
-            p = logits[i, q_idx].float().sigmoid()
-            lab = t["labels"][gt_idx]
-            pos = self.alpha * (1 - p) ** self.gamma * -(p + 1e-8).log()
-            neg = (1 - self.alpha) * p ** self.gamma * -(1 - p + 1e-8).log()
-            c = self.w_cls * (pos[:, lab] - neg[:, lab])
-            pb, gb = boxes[i, q_idx].float(), t["boxes"][gt_idx].float()
-            c = c + self.w_l1 * torch.cdist(pb, gb, p=1)
-            c = c - self.w_giou * generalized_box_iou(cxcywh_to_xyxy(pb), cxcywh_to_xyxy(gb))
-            if self.w_nwd:
-                c = c + self.w_nwd * (1 - nwd(pb, gb, self.nwd_c))
-            r, col = linear_sum_assignment(c.cpu().numpy())
-            out.append((torch.cat([fq, q_idx[r]]), torch.cat([fg, gt_idx[col]])))
+        b, q, _ = logits.shape
+        sizes = [len(t["labels"]) for t in targets]
+        fixed = fixed or [(EMPTY, EMPTY)] * b
+        if sum(sizes) == 0 or q == skip:
+            return [(fq.cpu(), fg.cpu()) for fq, fg in fixed]
+        lab = torch.cat([t["labels"] for t in targets])
+        gtb = torch.cat([t["boxes"] for t in targets]).float()
+        p = logits[:, skip:].flatten(0, 1).float().sigmoid()
+        pb = boxes[:, skip:].flatten(0, 1).float()
+        pos = self.alpha * (1 - p) ** self.gamma * -(p + 1e-8).log()
+        neg = (1 - self.alpha) * p ** self.gamma * -(1 - p + 1e-8).log()
+        c = self.w_cls * (pos[:, lab] - neg[:, lab])
+        c = c + self.w_l1 * torch.cdist(pb, gtb, p=1)
+        c = c - self.w_giou * generalized_box_iou(cxcywh_to_xyxy(pb), cxcywh_to_xyxy(gtb))
+        if self.w_nwd:
+            c = c + self.w_nwd * (1 - nwd(pb, gtb, self.nwd_c))
+        c = c.view(b, q - skip, -1).cpu()
+        out, start = [], 0
+        for i, n in enumerate(sizes):
+            fq, fg = fixed[i][0].cpu(), fixed[i][1].cpu()
+            free = torch.ones(n, dtype=torch.bool)
+            free[fg] = False
+            gt_idx = free.nonzero()[:, 0]
+            if len(gt_idx):
+                r, col = linear_sum_assignment(c[i, :, start + gt_idx].numpy())
+                fq = torch.cat([fq, torch.as_tensor(r, dtype=torch.long) + skip])
+                fg = torch.cat([fg, gt_idx[torch.as_tensor(col, dtype=torch.long)]])
+            out.append((fq, fg))
+            start += n
         return out
 
 
@@ -84,25 +96,26 @@ class SetCriterion(nn.Module):
         self.project = project
 
     @staticmethod
-    def _gather(matches, *tensors):
-        """Concatenate matched rows of [B, Q, ...] tensors over the batch."""
-        return [torch.cat([t[i, qi] for i, (qi, _) in enumerate(matches)]) for t in tensors]
+    def _flat(matches, offsets, device):
+        """Per-image matches -> (batch idx, query idx, global gt idx) on `device`."""
+        bi = torch.cat([torch.full((len(q),), i, dtype=torch.long) for i, (q, _) in enumerate(matches)])
+        qi = torch.cat([q for q, _ in matches])
+        gi = torch.cat([g + offsets[i] for i, (_, g) in enumerate(matches)])
+        return bi.to(device), qi.to(device), gi.to(device)
 
-    def _single(self, o, targets, matches, n_norm, ref_init=None):
+    def _single(self, o, flat, all_lab, all_box, n_norm, ref_init=None):
         logits, boxes = o["pred_logits"], o["pred_boxes"]
-        tgt_b = torch.cat([t["boxes"][gi] for t, (_, gi) in zip(targets, matches)]).float()
-        sb = self._gather(matches, boxes)[0].float()
-        has = len(sb) > 0
-        iou = box_iou(cxcywh_to_xyxy(sb), cxcywh_to_xyxy(tgt_b))[0].diag().detach() if has else sb.new_zeros(0)
-
+        bi, qi, gi = flat
+        has = len(bi) > 0
         pos = torch.zeros_like(logits, dtype=torch.bool)
         q = torch.zeros_like(logits, dtype=torch.float32)
-        k = 0
-        for i, (qi, gi) in enumerate(matches):
-            lab = targets[i]["labels"][gi]
-            pos[i, qi, lab] = True
-            q[i, qi, lab] = iou[k:k + len(qi)]
-            k += len(qi)
+        if has:
+            lab, tgt_b = all_lab[gi], all_box[gi].float()
+            sb = boxes[bi, qi].float()
+            iou, giou = aligned_giou(cxcywh_to_xyxy(sb), cxcywh_to_xyxy(tgt_b))
+            iou = iou.detach()
+            pos[bi, qi, lab] = True
+            q[bi, qi, lab] = iou
         if self.cls_loss == "mal":
             loss = {"cls": mal_loss(logits.float(), q, pos) / n_norm}
         else:
@@ -110,69 +123,72 @@ class SetCriterion(nn.Module):
         if not has:
             zero = boxes.sum() * 0
             loss.update(l1=zero, giou=zero)
-            return loss, iou
+            return loss, None
         loss["l1"] = F.l1_loss(sb, tgt_b, reduction="sum") / n_norm
-        loss["giou"] = (1 - generalized_box_iou(cxcywh_to_xyxy(sb), cxcywh_to_xyxy(tgt_b)).diag()).sum() / n_norm
+        loss["giou"] = (1 - giou).sum() / n_norm
         if "pred_corners" in o and ref_init is not None:
-            corners, ref = self._gather(matches, o["pred_corners"], ref_init)
-            corners = corners.float().view(-1, 4, self.project.numel())
-            idx, wl, wr = bbox2distance(ref.float(), tgt_b, self.reg_scale, self.project)
+            corners = o["pred_corners"][bi, qi].float().view(-1, 4, self.project.numel())
+            idx, wl, wr = bbox2distance(ref_init[bi, qi].float(), tgt_b, self.reg_scale, self.project)
             logp = corners.log_softmax(-1)
             dfl = -(logp.gather(-1, idx[..., None])[..., 0] * wl + logp.gather(-1, idx[..., None] + 1)[..., 0] * wr)
             loss["fgl"] = (dfl.mean(-1) * iou).sum() / n_norm
         return loss, iou
 
-    def _ddf(self, layers, final, matches, iou, n_norm):
+    def _ddf(self, layers, final, flat, iou, n_norm):
         """GO-LSD: matched queries' edge distributions in earlier layers follow the final layer."""
-        t = self.ddf_t
-        tgt = self._gather(matches, final["pred_corners"])[0].float().detach()
-        tgt = tgt.view(-1, 4, self.project.numel())
+        t, (bi, qi, _) = self.ddf_t, flat
+        tgt = final["pred_corners"][bi, qi].float().detach().view(-1, 4, self.project.numel())
         total = 0.0
         for o in layers:
-            src = self._gather(matches, o["pred_corners"])[0].float().view_as(tgt)
+            src = o["pred_corners"][bi, qi].float().view_as(tgt)
             kl = F.kl_div((src / t).log_softmax(-1), (tgt / t).softmax(-1), reduction="none").sum(-1).mean(-1)
             total = total + (kl * iou).sum() * t * t / n_norm
         return total
 
     def forward(self, out, targets, fixed=None):
         """out: SarbonDetector output; fixed: track-query assignments (see matcher)."""
+        dev = out["pred_logits"].device
         skip = out.get("n_track", 0)
-        n_norm = max(1.0, float(sum(len(t["labels"]) for t in targets)))
+        sizes = [len(t["labels"]) for t in targets]
+        offsets = [0]
+        for n in sizes[:-1]:
+            offsets.append(offsets[-1] + n)
+        all_lab = torch.cat([t["labels"] for t in targets]).to(dev)
+        all_box = torch.cat([t["boxes"] for t in targets]).to(dev)
+        n_norm = max(1.0, float(sum(sizes)))
         total, logs = 0.0, {}
-        final = {k: out[k] for k in ("pred_logits", "pred_boxes", "pred_corners") if k in out}
-        layers = [*out["aux"], final]
-        ref_init = out.get("ref_init")
-        final_matches = self.matcher(final["pred_logits"], final["pred_boxes"], targets, fixed, skip)
-        final_iou = None
-        for li, o in enumerate(layers):
-            last = li == len(layers) - 1
-            m = final_matches if last else self.matcher(o["pred_logits"], o["pred_boxes"], targets, fixed, skip)
-            parts, iou = self._single(o, targets, m, n_norm, ref_init)
+
+        def run(o, matches, norm, ref_init=None, log=False):
+            nonlocal total
+            flat = self._flat(matches, offsets, dev)
+            parts, iou = self._single(o, flat, all_lab, all_box, norm, ref_init)
             for k, v in parts.items():
                 total = total + self.w[k] * v
-                if last:
+                if log:
                     logs[k] = v.item()
-            if last:
-                final_iou = iou
-        if "pred_corners" in final and len(out["aux"]) and final_iou is not None and len(final_iou):
-            ddf = self._ddf(out["aux"], final, final_matches, final_iou, n_norm)
+            return flat, iou
+
+        final = {k: out[k] for k in ("pred_logits", "pred_boxes", "pred_corners") if k in out}
+        ref_init = out.get("ref_init")
+        final_matches = self.matcher(final["pred_logits"], final["pred_boxes"], targets, fixed, skip)
+        for o in out["aux"]:
+            run(o, self.matcher(o["pred_logits"], o["pred_boxes"], targets, fixed, skip), n_norm, ref_init)
+        flat, iou = run(final, final_matches, n_norm, ref_init, log=True)
+        if "pred_corners" in final and len(out["aux"]) and iou is not None:
+            ddf = self._ddf(out["aux"], final, flat, iou, n_norm)
             total = total + self.w["ddf"] * ddf
             logs["ddf"] = ddf.item()
-        # pre-box layer and encoder proposals (new objects only for the encoder)
-        if "pre" in out:
-            m = self.matcher(out["pre"]["pred_logits"], out["pre"]["pred_boxes"], targets, fixed, skip)
-            for k, v in self._single(out["pre"], targets, m, n_norm)[0].items():
-                total = total + self.w[k] * v
+        if "pre" in out:  # pre-box layer
+            run(out["pre"], self.matcher(out["pre"]["pred_logits"], out["pre"]["pred_boxes"], targets,
+                                         fixed, skip), n_norm)
         enc = {"pred_logits": out["enc_logits"], "pred_boxes": out["enc_boxes"]}
-        m = self.matcher(enc["pred_logits"], enc["pred_boxes"], targets)
-        for k, v in self._single(enc, targets, m, n_norm)[0].items():
-            total = total + self.w[k] * v
+        run(enc, self.matcher(enc["pred_logits"], enc["pred_boxes"], targets), n_norm)
         if "dn" in out:  # denoising: assignments are known, no matching
             dn = out["dn"]
-            m, norm = dn["matches"], n_norm * dn["groups"]
-            dn_layers = [*dn["aux"], {k: dn[k] for k in ("pred_logits", "pred_boxes", "pred_corners")}, dn["pre"]]
-            for o in dn_layers:
-                for k, v in self._single(o, targets, m, norm, dn["ref_init"])[0].items():
-                    total = total + self.w[k] * v
-            logs["dn"] = sum(self._single(dn_layers[-2], targets, m, norm)[0].values()).item()
+            norm = n_norm * dn["groups"]
+            before = total
+            for o in [*dn["aux"], {k: dn[k] for k in ("pred_logits", "pred_boxes", "pred_corners")}]:
+                run(o, dn["matches"], norm, dn["ref_init"])
+            run(dn["pre"], dn["matches"], norm)
+            logs["dn"] = float(total - before) if not torch.is_tensor(total) else (total - before).item()
         return total, logs, final_matches

@@ -20,16 +20,33 @@ def box_iou(a, b):
     """Pairwise IoU of xyxy boxes [N, 4] x [M, 4] -> ([N, M] iou, [N, M] union)."""
     lt = torch.max(a[:, None, :2], b[None, :, :2])
     rb = torch.min(a[:, None, 2:], b[None, :, 2:])
-    inter = (rb - lt).clamp(min=0).prod(-1)
+    wh = (rb - lt).clamp(min=0)
+    inter = wh[..., 0] * wh[..., 1]  # not .prod(): its backward goes through cumprod
     union = box_area(a)[:, None] + box_area(b)[None] - inter
     return inter / union.clamp(min=1e-7), union
+
+
+def aligned_giou(a, b):
+    """Element-wise (IoU, GIoU) of xyxy boxes a[i] vs b[i] (no N x M matrix)."""
+    lt = torch.max(a[:, :2], b[:, :2])
+    rb = torch.min(a[:, 2:], b[:, 2:])
+    wh = (rb - lt).clamp(min=0)
+    inter = wh[:, 0] * wh[:, 1]
+    union = box_area(a) + box_area(b) - inter
+    iou = inter / union.clamp(min=1e-7)
+    hl = torch.min(a[:, :2], b[:, :2])
+    hr = torch.max(a[:, 2:], b[:, 2:])
+    hwh = (hr - hl).clamp(min=0)
+    hull = hwh[:, 0] * hwh[:, 1]
+    return iou, iou - (hull - union) / hull.clamp(min=1e-7)
 
 
 def generalized_box_iou(a, b):
     iou, union = box_iou(a, b)
     lt = torch.min(a[:, None, :2], b[None, :, :2])
     rb = torch.max(a[:, None, 2:], b[None, :, 2:])
-    hull = (rb - lt).clamp(min=0).prod(-1)
+    wh = (rb - lt).clamp(min=0)
+    hull = wh[..., 0] * wh[..., 1]
     return iou - (hull - union) / hull.clamp(min=1e-7)
 
 

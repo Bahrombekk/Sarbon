@@ -111,13 +111,13 @@ def decode(heat_logits, reg_pred, k=100):
     keep = F.max_pool2d(heat, 3, 1, 1) == heat
     heat = heat * keep
     n, c, h, w = heat.shape
-    scores, idx = heat.view(n, -1).topk(k)
+    scores, idx = heat.reshape(n, -1).topk(k)  # reshape: outputs may be channels_last
     labels = idx // (h * w)
     pix = idx % (h * w)
     ys, xs = (pix // w).float(), (pix % w).float()
     out = []
     for i in range(n):
-        r = reg_pred[i].view(4, -1)[:, pix[i]].float()
+        r = reg_pred[i].reshape(4, -1)[:, pix[i]].float()
         cx, cy = xs[i] + r[2], ys[i] + r[3]
         boxes = torch.stack([cx - r[0] / 2, cy - r[1] / 2, cx + r[0] / 2, cy + r[1] / 2], 1) * STRIDE
         out.append((boxes, scores[i], labels[i]))
