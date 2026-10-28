@@ -45,6 +45,45 @@ def nwd(a, b, c):
     return torch.exp(-w2.clamp(min=0).sqrt() / c)
 
 
+# ---------------- Fine-grained Distribution Refinement (D-FINE, 2410.13842) ----------------
+# Each box edge is a distribution over reg_max + 1 bins whose values W(n) are dense near
+# 0 (fine corrections) and sparse at the ends (coarse jumps). Edges are measured from an
+# initial box in units of (box size / reg_scale).
+
+def fdr_project(reg_max=32, up=0.5, reg_scale=4.0):
+    ub1 = abs(up) * abs(reg_scale)
+    ub2 = ub1 * 2
+    step = (ub1 + 1) ** (2 / (reg_max - 2))
+    left = [-(step ** i) + 1 for i in range(reg_max // 2 - 1, 0, -1)]
+    right = [step ** i - 1 for i in range(1, reg_max // 2)]
+    return torch.tensor([-ub2] + left + [0.0] + right + [ub2])
+
+
+def distance2bbox(points, dist, reg_scale):
+    """points cxcywh [..., 4]; dist (left, top, right, bottom) in bin-value units -> cxcywh."""
+    cx, cy, w, h = points.unbind(-1)
+    sw, sh = w / reg_scale, h / reg_scale
+    x0 = cx - (0.5 * reg_scale + dist[..., 0]) * sw
+    y0 = cy - (0.5 * reg_scale + dist[..., 1]) * sh
+    x1 = cx + (0.5 * reg_scale + dist[..., 2]) * sw
+    y1 = cy + (0.5 * reg_scale + dist[..., 3]) * sh
+    return xyxy_to_cxcywh(torch.stack([x0, y0, x1, y1], -1))
+
+
+def bbox2distance(points, gt, reg_scale, project):
+    """Target edges of `gt` w.r.t. `points` as (left bin index, left weight, right weight)."""
+    cx, cy, w, h = points.unbind(-1)
+    x0, y0, x1, y1 = cxcywh_to_xyxy(gt).unbind(-1)
+    sw, sh = w / reg_scale + 1e-16, h / reg_scale + 1e-16
+    d = torch.stack([(cx - x0) / sw, (cy - y0) / sh, (x1 - cx) / sw, (y1 - cy) / sh], -1) - 0.5 * reg_scale
+    p = project.to(d)
+    d = d.clamp(p[0], p[-1] - 1e-6)
+    idx = (torch.searchsorted(p, d.contiguous(), right=True) - 1).clamp(0, len(p) - 2)
+    lo, hi = p[idx], p[idx + 1]
+    wr = ((d - lo) / (hi - lo)).clamp(0, 1)
+    return idx, 1 - wr, wr
+
+
 def inverse_sigmoid(x, eps=1e-5):
     x = x.clamp(eps, 1 - eps)
     return torch.log(x / (1 - x))

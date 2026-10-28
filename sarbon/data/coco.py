@@ -16,6 +16,7 @@ from torch.utils.data import Dataset
 COMMERCIAL_OK = {"Attribution License", "Attribution-ShareAlike License",
                  "No known copyright restrictions", "United States Government Work"}
 SURVEILLANCE = ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
+ALL = None  # every COCO category (research benchmark against published numbers)
 
 
 def letterbox(img, size):
@@ -37,7 +38,7 @@ class CocoDetection(Dataset):
         self.img_dir = root / split
         self.size, self.train = size, train
         names = {c["id"]: c["name"] for c in ann["categories"]}
-        self.cat_ids = [cid for cid, n in names.items() if n in classes]
+        self.cat_ids = [cid for cid, n in names.items() if classes is None or n in classes]
         self.label_of = {cid: i for i, cid in enumerate(self.cat_ids)}
         ok_lic = {l["id"] for l in ann["licenses"] if l["name"] in COMMERCIAL_OK}
         boxes = {}
@@ -68,7 +69,8 @@ class CocoDetection(Dataset):
             out.append((im["id"], b, [self.label_of[a["category_id"]] for a in anns]))
         return out
 
-    def __getitem__(self, i):
+    def load(self, i):
+        """Letterboxed RGB uint8 image, xyxy boxes (pixels), labels, meta. No augmentation."""
         im = self.images[i]
         img = cv2.imread(str(self.img_dir / im["file_name"]))[:, :, ::-1]
         img, s, (px, py) = letterbox(img, self.size)
@@ -76,11 +78,77 @@ class CocoDetection(Dataset):
         b[:, 2:] += b[:, :2]
         b = b * s + np.array([px, py, px, py], np.float32)
         labels = np.array([self.label_of[a["category_id"]] for a in self.boxes[im["id"]]])
+        return img, b, labels, (im["id"], s, px, py)
+
+    def __getitem__(self, i):
+        img, b, labels, meta = self.load(i)
         if self.train and random.random() < 0.5:
             img = img[:, ::-1]
             b[:, [0, 2]] = self.size - b[:, [2, 0]]
         t = torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1)
-        return t, torch.from_numpy(b), torch.from_numpy(labels), (im["id"], s, px, py)
+        return t, torch.from_numpy(b), torch.from_numpy(labels), meta
+
+
+class MosaicDetection(Dataset):
+    """Mosaic of 4 images + random scale/crop + flip (YOLOv4 mosaic; DEIM's Dense O2O).
+
+    More objects per image means more one-to-one positives per step, which DEIM shows
+    speeds up DETR training. `prob` is lowered to 0 for the final epochs.
+    """
+
+    def __init__(self, base, prob=0.5, scale=(0.5, 1.5), min_px=2.0):
+        self.base, self.prob, self.scale, self.min_px = base, prob, scale, min_px
+        self.size = base.size
+
+    def __len__(self):
+        return len(self.base)
+
+    def _clip(self, b, labels, s):
+        if not len(b):
+            return b, labels
+        area0 = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+        b = b.clip(0, s)
+        area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
+        keep = ((b[:, 2] - b[:, 0]) > self.min_px) & ((b[:, 3] - b[:, 1]) > self.min_px) & (area > 0.25 * area0)
+        return b[keep], labels[keep]
+
+    def __getitem__(self, i):
+        s = self.size
+        if random.random() < self.prob:
+            canvas = np.full((2 * s, 2 * s, 3), 114, np.uint8)
+            xc, yc = (int(random.uniform(0.5 * s, 1.5 * s)) for _ in range(2))
+            boxes, labels = [], []
+            for k, j in enumerate([i] + random.choices(range(len(self.base)), k=3)):
+                img, b, l, _ = self.base.load(j)
+                # quadrant placement around (xc, yc), as in YOLO mosaic
+                x0, y0 = (xc - s, yc - s) if k == 0 else (xc, yc - s) if k == 1 else \
+                         (xc - s, yc) if k == 2 else (xc, yc)
+                cx0, cy0 = max(x0, 0), max(y0, 0)
+                cx1, cy1 = min(x0 + s, 2 * s), min(y0 + s, 2 * s)
+                canvas[cy0:cy1, cx0:cx1] = img[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0]
+                boxes.append(b + np.array([x0, y0, x0, y0], np.float32))
+                labels.append(l)
+            b, l = np.concatenate(boxes), np.concatenate(labels)
+            # random scale, then a random s x s crop
+            f = random.uniform(*self.scale) * 0.5
+            canvas = cv2.resize(canvas, None, fx=f, fy=f, interpolation=cv2.INTER_LINEAR)
+            b = b * f
+            ch, cw = canvas.shape[:2]
+            if ch < s or cw < s:
+                pad = np.full((max(ch, s), max(cw, s), 3), 114, np.uint8)
+                pad[:ch, :cw] = canvas
+                canvas, ch, cw = pad, max(ch, s), max(cw, s)
+            ox, oy = random.randint(0, cw - s), random.randint(0, ch - s)
+            img = canvas[oy:oy + s, ox:ox + s]
+            b, l = self._clip(b - np.array([ox, oy, ox, oy], np.float32), l, s)
+        else:
+            img, b, l, _ = self.base.load(i)
+        if random.random() < 0.5:
+            img = img[:, ::-1]
+            b = b.copy()
+            b[:, [0, 2]] = s - b[:, [2, 0]]
+        t = torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1)
+        return t, torch.from_numpy(b.astype(np.float32)), torch.from_numpy(l.astype(np.int64)), (i, 1.0, 0, 0)
 
 
 class SyntheticDetection(Dataset):
@@ -98,6 +166,10 @@ class SyntheticDetection(Dataset):
             _, b, l, _ = self[i]
             out.append((i, b.tolist(), l.tolist()))
         return out
+
+    def load(self, i):
+        t, b, l, meta = self[i]
+        return t.permute(1, 2, 0).numpy(), b.numpy(), l.numpy(), meta
 
     def __getitem__(self, i):
         rng = np.random.default_rng(self.seed + i)

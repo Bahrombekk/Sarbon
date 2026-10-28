@@ -21,8 +21,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .block_local import BlockLocalStem, Res, conv_bn_act
-from .box_ops import inverse_sigmoid
+from .block_local import BLOCKS, BlockLocalStem, conv_bn_act
+from .box_ops import distance2bbox, fdr_project, inverse_sigmoid
 from .deform_attn import MSDeformAttn
 
 
@@ -40,6 +40,13 @@ class SarbonConfig:
     points: int = 4
     block: int = 32
     halo_zero: bool = True
+    reg_max: int = 32  # FDR bins per box edge (reg_max + 1 values)
+    reg_scale: float = 4.0
+    block_type: str = "res"  # "res" | "rep" (RepVGG, fused for inference) | "dw" (inverted bottleneck)
+    act: str = "relu"  # "relu" | "silu" | "gelu"
+    num_denoising: int = 100  # contrastive denoising queries during training (0 = off)
+    label_noise: float = 0.5
+    box_noise: float = 1.0
 
 
 SIZES = {
@@ -81,8 +88,9 @@ class DenseCore(nn.Module):
     def __init__(self, cfg: SarbonConfig):
         super().__init__()
         c8, d = cfg.widths[2], cfg.hidden
-        self.to16 = nn.Sequential(conv_bn_act(c8, cfg.c16, 2), Res(cfg.c16), Res(cfg.c16))
-        self.to32 = nn.Sequential(conv_bn_act(cfg.c16, cfg.c32, 2), Res(cfg.c32))
+        unit, a = BLOCKS[cfg.block_type], cfg.act
+        self.to16 = nn.Sequential(conv_bn_act(c8, cfg.c16, 2, act_name=a), unit(cfg.c16, a), unit(cfg.c16, a))
+        self.to32 = nn.Sequential(conv_bn_act(cfg.c16, cfg.c32, 2, act_name=a), unit(cfg.c32, a))
         self.in8, self.in16, self.in32 = (nn.Sequential(nn.Conv2d(c, d, 1, bias=False), nn.BatchNorm2d(d))
                                           for c in (c8, cfg.c16, cfg.c32))
         self.aifi = nn.TransformerEncoderLayer(d, cfg.heads, cfg.ffn, 0.0, batch_first=True,
@@ -130,7 +138,7 @@ class SarbonDetector(nn.Module):
         cfg = cfg or SarbonConfig()
         self.cfg, self.num_classes = cfg, num_classes
         d = cfg.hidden
-        self.stem = BlockLocalStem(cfg.block, cfg.widths, cfg.depths)
+        self.stem = BlockLocalStem(cfg.block, cfg.widths, cfg.depths, cfg.block_type, cfg.act)
         self.core = DenseCore(cfg)
         # encoder proposal heads (query selection)
         self.enc_proj = nn.Sequential(nn.Linear(d, d), nn.LayerNorm(d))
@@ -140,16 +148,82 @@ class SarbonDetector(nn.Module):
         self.layers = nn.ModuleList(DecoderLayer(cfg) for _ in range(cfg.dec_layers))
         self.query_pos = mlp(4, 2 * d, d, 2)
         self.cls_heads = nn.ModuleList(nn.Linear(d, num_classes) for _ in range(cfg.dec_layers))
-        self.box_heads = nn.ModuleList(mlp(d, d, 4, 3) for _ in range(cfg.dec_layers))
+        # FDR: layer 0 sets an initial box; every layer then refines per-edge distributions
+        self.pre_box = mlp(d, d, 4, 3)
+        self.corner_heads = nn.ModuleList(mlp(d, d, 4 * (cfg.reg_max + 1), 3)
+                                          for _ in range(cfg.dec_layers))
+        self.register_buffer("project", fdr_project(cfg.reg_max, 0.5, cfg.reg_scale), persistent=False)
+        self.dn_label = nn.Embedding(num_classes + 1, d)  # last row: padding
         self._reset()
 
     def _reset(self):
         prior = -math.log((1 - 0.01) / 0.01)
         for head in [self.enc_cls, *self.cls_heads]:
             nn.init.constant_(head.bias, prior)
-        for head in [self.enc_box, *self.box_heads]:
+        for head in [self.enc_box, self.pre_box, *self.corner_heads]:
             nn.init.zeros_(head[-1].weight)
             nn.init.zeros_(head[-1].bias)
+
+    def denoising(self, targets, device):
+        """Contrastive denoising queries (DINO, 2203.03605), RT-DETR style.
+
+        Each group holds a positive (small box noise, must reconstruct the object) and a
+        negative (large noise, must say "no object") copy of every ground truth.
+        Returns content [B, N, D], boxes [B, N, 4], matches per image, groups, N.
+        """
+        cfg = self.cfg
+        n_gt = [len(t["labels"]) for t in targets]
+        mx = max(n_gt) if n_gt else 0
+        if mx == 0 or cfg.num_denoising == 0:
+            return None
+        groups = max(1, cfg.num_denoising // (2 * mx))
+        b = len(targets)
+        labels = torch.full((b, mx), self.num_classes, dtype=torch.long, device=device)
+        boxes = torch.zeros(b, mx, 4, device=device)
+        valid = torch.zeros(b, mx, dtype=torch.bool, device=device)
+        for i, t in enumerate(targets):
+            labels[i, :n_gt[i]] = t["labels"]
+            boxes[i, :n_gt[i]] = t["boxes"]
+            valid[i, :n_gt[i]] = True
+        labels = labels.repeat(1, 2 * groups)  # layout: [g0 pos, g0 neg, g1 pos, g1 neg, ...]
+        boxes = boxes.repeat(1, 2 * groups, 1)
+        valid = valid.repeat(1, 2 * groups)
+        neg = torch.zeros(b, mx * 2 * groups, dtype=torch.bool, device=device)
+        neg.view(b, groups, 2, mx)[:, :, 1] = True
+        if cfg.label_noise > 0:
+            flip = torch.rand(labels.shape, device=device) < cfg.label_noise * 0.5
+            labels = torch.where(flip & valid, torch.randint_like(labels, self.num_classes), labels)
+        if cfg.box_noise > 0:
+            xyxy = torch.cat([boxes[..., :2] - boxes[..., 2:] / 2, boxes[..., :2] + boxes[..., 2:] / 2], -1)
+            diff = torch.cat([boxes[..., 2:] / 2, boxes[..., 2:] / 2], -1) * cfg.box_noise
+            sign = torch.randint_like(xyxy, 0, 2) * 2 - 1
+            r = torch.rand_like(xyxy) + neg[..., None].float()  # |r| < 1 positives, in [1, 2) negatives
+            xyxy = (xyxy + sign * r * diff).clamp(0, 1)
+            boxes = torch.cat([(xyxy[..., :2] + xyxy[..., 2:]) / 2, (xyxy[..., 2:] - xyxy[..., :2]).clamp(min=1e-4)], -1)
+        content = self.dn_label(labels.masked_fill(~valid, self.num_classes))
+        matches = []
+        for i in range(b):
+            q = torch.cat([torch.arange(n_gt[i], device=device) + g * 2 * mx for g in range(groups)])
+            gidx = torch.arange(n_gt[i], device=device).repeat(groups)
+            matches.append((q.cpu(), gidx.cpu()))
+        return content, boxes.clamp(1e-4, 1 - 1e-4), matches, groups, mx * 2 * groups
+
+    @staticmethod
+    def dn_attn_mask(n_dn, n_match, group_size, device):
+        """True = blocked. Matching queries never see denoising ones; groups are isolated."""
+        n = n_dn + n_match
+        mask = torch.zeros(n, n, dtype=torch.bool, device=device)
+        mask[n_dn:, :n_dn] = True
+        for g in range(n_dn // group_size):
+            s, e = g * group_size, (g + 1) * group_size
+            mask[s:e, :s] = True
+            mask[s:e, e:n_dn] = True
+        return mask
+
+    def integral(self, corners):
+        """[B, Q, 4*(R+1)] logits -> expected edge offsets [B, Q, 4] in bin-value units."""
+        p = corners.view(*corners.shape[:-1], 4, -1).softmax(-1)
+        return p @ self.project.to(p.dtype)
 
     # ---------------- features ----------------
     def features(self, img):
@@ -173,12 +247,14 @@ class SarbonDetector(nn.Module):
         valid = ((a > 0.01) & (a < 0.99)).all(-1, keepdim=True)
         return inverse_sigmoid(a).masked_fill(~valid, float("inf")).to(dtype), valid
 
-    def forward(self, img, tracks=None):
+    def forward(self, img, tracks=None, targets=None):
         """img [B, 3, H, W] normalised. tracks: optional {"embed": [B, T, D], "boxes": [B, T, 4]}.
+        targets (training only): enables contrastive denoising queries.
 
         Returns a dict with per-layer predictions (last layer first-class), the encoder
         proposals (for their own loss) and `embed`/`boxes` to feed back as tracks.
-        Queries [0, T) are the track queries, the rest are new.
+        Queries [0, T) are the track queries, the rest are new; denoising outputs, if
+        any, are returned separately under "dn".
         """
         feats = self.features(img)
         shapes = [f.shape[-2:] for f in feats]
@@ -203,16 +279,45 @@ class SarbonDetector(nn.Module):
             tgt = torch.cat([tracks["embed"], tgt], 1)
             ref = torch.cat([tracks["boxes"].detach(), ref], 1)
 
-        logits, boxes = [], []
-        for layer, cls_head, box_head in zip(self.layers, self.cls_heads, self.box_heads):
-            tgt = layer(tgt, self.query_pos(ref), ref, memory, shapes)
-            new_ref = (box_head(tgt) + inverse_sigmoid(ref)).sigmoid()
+        n_dn, attn_mask, dn = 0, None, None
+        if self.training and targets is not None:
+            dn = self.denoising(targets, tgt.device)
+            if dn is not None:
+                dn_content, dn_boxes, dn_matches, groups, n_dn = dn
+                tgt = torch.cat([dn_content, tgt], 1)
+                ref = torch.cat([dn_boxes, ref], 1)
+                attn_mask = self.dn_attn_mask(n_dn, tgt.shape[1] - n_dn, n_dn // groups, tgt.device)
+
+        logits, boxes, corners_all = [], [], []
+        corners = tgt_detach = ref_init = pre = pre_logits = None
+        for i, (layer, cls_head, corner_head) in enumerate(zip(self.layers, self.cls_heads,
+                                                               self.corner_heads)):
+            tgt = layer(tgt, self.query_pos(ref), ref, memory, shapes, attn_mask)
+            if i == 0:
+                pre = (self.pre_box(tgt) + inverse_sigmoid(ref)).sigmoid()
+                pre_logits = cls_head(tgt)
+                ref_init = pre.detach()
+                corners = corner_head(tgt)
+            else:
+                # residual refinement of the distributions (gradient flows through `tgt`
+                # once directly and once via the previous layers' corners)
+                corners = corner_head(tgt + tgt_detach) + corners
+            box = distance2bbox(ref_init, self.integral(corners), self.cfg.reg_scale)
             logits.append(cls_head(tgt))
-            boxes.append(new_ref)
-            ref = new_ref.detach()
-        out.update(pred_logits=logits[-1], pred_boxes=boxes[-1], n_track=n_track,
-                   aux=[{"pred_logits": l, "pred_boxes": b} for l, b in zip(logits[:-1], boxes[:-1])],
-                   embed=tgt, boxes=boxes[-1])
+            boxes.append(box)
+            corners_all.append(corners)
+            ref, tgt_detach = box.detach(), tgt.detach()
+
+        def pack(sl):
+            return {"pred_logits": logits[-1][:, sl], "pred_boxes": boxes[-1][:, sl],
+                    "pred_corners": corners_all[-1][:, sl], "ref_init": ref_init[:, sl],
+                    "pre": {"pred_logits": pre_logits[:, sl], "pred_boxes": pre[:, sl]},
+                    "aux": [{"pred_logits": l[:, sl], "pred_boxes": b[:, sl], "pred_corners": c[:, sl]}
+                            for l, b, c in zip(logits[:-1], boxes[:-1], corners_all[:-1])]}
+
+        out.update(pack(slice(n_dn, None)), n_track=n_track, embed=tgt[:, n_dn:], boxes=boxes[-1][:, n_dn:])
+        if n_dn:
+            out["dn"] = {**pack(slice(0, n_dn)), "matches": dn_matches, "groups": groups}
         return out
 
 

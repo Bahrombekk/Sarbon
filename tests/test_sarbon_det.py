@@ -42,11 +42,12 @@ def main():
     # overfit a tiny batch: proves model + matcher + losses agree
     imgs, targets = batch()
     m = build("n", num_classes=3, queries=50)
-    crit = SetCriterion(3)
+    crit = SetCriterion(3, project=m.project)  # MAL + L1/GIoU + FGL + DDF
     opt = torch.optim.AdamW(m.parameters(), 2e-4, weight_decay=1e-4)
     t0 = time.time()
     for it in range(301):
-        out = m(imgs)
+        out = m(imgs, targets=targets)  # training mode: + contrastive denoising queries
+        assert "dn" in out and out["pred_logits"].shape[1] == 50
         loss, logs, _ = crit(out, targets)
         opt.zero_grad()
         loss.backward()

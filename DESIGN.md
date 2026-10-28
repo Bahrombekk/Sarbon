@@ -347,17 +347,68 @@ Treking uchun:
 
 | Model | Parametr | Decoder | Query |
 |---|---|---|---|
-| Sarbon-N | 3.9M | 3 qatlam, d=128 | 150 |
-| Sarbon-S | 12.8M | 4 qatlam, d=256 | 300 |
-| Sarbon-M | 24.9M | 6 qatlam, d=256 | 300 |
+| Sarbon-N | 4.0M | 3 qatlam, d=128 | 150 |
+| Sarbon-S | 13.1M (`dw` blok bilan 10.2M) | 4 qatlam, d=256 | 300 |
+| Sarbon-M | 25.2M | 6 qatlam, d=256 | 300 |
 
 `tests/test_sarbon_det.py` (CPU) natijalari:
 - Forward va backward ishlaydi.
 - Kichik batch yodlab olindi: loss 23 → 0.3, har obyekt IoU 0.95–0.98.
 - Track query qadami: ID'lar saqlanadi.
 
-Hali yo'q, keyingi navbatda: D-FINE FDR regressiya, kontrastiv denoising (CDN), DEIM Dense O2O,
-foveal yo'l, klip bo'yicha video o'qitish va staleness simulyatsiyasi.
+**v1 (shu kuni qo'shildi, barchasi o'z kodimiz, g'oyalar Apache litsenziyali maqolalardan):**
+- **FDR (D-FINE):** har box chegarasi 33 bin'li distribution sifatida beriladi. Bin qiymatlari 0 atrofida
+  zich, chetlarda siyrak. Har decoder qatlami oldingi qatlam logit'lariga qoldiq qo'shadi.
+  Bin bo'yicha kodlash va dekodlash aylanasi aniq tekshirildi.
+- **GO-LSD:** oxirgi qatlam distribution'lari oldingi qatlamlarga KL distillyatsiya qilinadi (DDF loss).
+- **MAL (DEIM):** musbat target = IoU^1.5. Boxi yaxshi query'ning ishonchi ham yuqori bo'ladi.
+- **Kontrastiv denoising (CDN):** GT'dan shovqinli musbat va manfiy query'lar yasaladi. Attention
+  niqobi qo'yiladi: guruhlar bir-biridan ajratilgan, matching query'lar denoising query'larni ko'rmaydi.
+  Tartib: `[denoising | track | yangi]`.
+- **Mosaic augmentatsiya** (DEIM Dense O2O): bitta qadamda ko'proq musbat. Oxirgi epoxalarda o'chiriladi.
+- **`experiments/train_sarbon.py`:** EMA, bf16, cosine LR, DETR top-K postprocess, COCO eval.
+  Ikki rejimi bor: tijoriy (6 klass, tijoriy litsenziyali rasmlar) va `--benchmark` (COCO-80,
+  faqat tadqiqot uchun solishtirish).
+- **Arxitektura variantlari** (config orqali):
+  - `block_type`: `res`, `rep` yoki `dw`.
+    - `rep` = RepVGG: o'qitishda 3 tarmoq, inference'da bitta 3×3 conv. Fusion aniqligi 5.5e-6
+      ichida, halo-zero xossasi saqlanadi.
+    - `dw` = inverted bottleneck: Sarbon-S 10.2M parametr (`res` da 13.1M).
+  - `act`: `relu`, `silu` yoki `gelu`.
+
+Testlar (CPU): `test_sarbon_det.py` (overfit, IoU 0.90–0.98, denoising bilan) va `test_arch_variants.py`.
+
+### "YOLO'dan kuchli" ekanini qanday isbotlaymiz (protokol)
+
+Da'vo faqat bir xil sharoitdagi o'lchov bilan qilinadi:
+1. **Aniqlik:** `train_sarbon.py --benchmark` bilan COCO-80 val2017, 640 px. Natija YOLO11/YOLO26
+   (s, m) va D-FINE/DEIM'ning e'lon qilingan AP raqamlari bilan solishtiriladi.
+2. **Tezlik:** bir xil GPU (5090), TensorRT FP16, batch 1 va batch 16, end-to-end vaqt (postprocess
+   bilan). YOLO'ni o'zimiz o'lchaymiz: Ultralytics'ni faqat lokal benchmark uchun ishga tushirish AGPL
+   bo'yicha mumkin, chunki kod tarqatilmaydi va bizning kodimizga qo'shilmaydi.
+3. **Sarbon'ning asosiy maydoni:** statik kamera videosi (MEVA/SmartSpaces). Ko'p kamerali serverda
+   "kamera/GPU" va "kadr/s" o'lchanadi. Bu yerda temporal sparsity ustunlik berishi kerak.
+4. **Kichik obyektlar:** AP_small va AI-TOD uslubidagi tiny-obyekt metrikalari.
+
+**Halol cheklov:** YOLO, D-FINE va DEIM backbone'lari ImageNet'da yoki Objects365'da oldindan
+o'qitilgan. Bizda hozircha pretraining yo'q. ImageNet esa tijoriy foydalanish uchun ruxsat bermaydi.
+
+Reja: DINOv2 (Apache-2.0) feature'laridan stem va dense yadroga distillyatsiya qilish. Bu tijoriy
+litsenziyali rasmlarda (Open Images, filtrlangan COCO) yorliqsiz amalga oshiriladi. Shu qilinmaguncha
+qisqa jadvalda (72 epoxa) natija pastroq bo'lishi kutiladi.
+
+### Arxitektura qidiruvi (GPU'da, qisqa jadval, bir xil byudjet)
+
+| Savol | Variantlar | Mezon |
+|---|---|---|
+| Halo-zero aniqlikka zarar qiladimi? | standard / halo | AP ≤ −1.0 (navbatda) |
+| Qaysi blok? | res / rep / dw | AP va TensorRT kechikishi (Pareto) |
+| Qaysi aktivatsiya? | relu / silu / gelu | AP; SiLU/GELU Triton yadrosiga epilog sifatida qo'shiladi |
+| Kichik obyekt matching | NWD 0 / 1 / 2 | AP_small |
+| Decoder chuqurligi va query soni | 3/4/6 qatlam, 150/300 | AP va kechikish |
+
+Hali yo'q, keyingi navbatda: DINOv2 distillyatsiya pretraining, foveal yo'l, klip bo'yicha video
+o'qitish va staleness simulyatsiyasi.
 
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
