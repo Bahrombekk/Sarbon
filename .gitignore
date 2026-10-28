@@ -5,6 +5,6 @@ __pycache__/
 *.pth
 *.onnx
 *.engine
-data/
-runs/
-outputs/
+/data/
+/runs/
+/outputs/
