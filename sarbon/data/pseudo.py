@@ -96,7 +96,8 @@ def pseudo_label(frames, cfg: PseudoConfig = None):
         per_frame[i] = [(tid, box) for tid, box, _, _ in out]
         raw[i] = b
         if cfg.paint and i % cfg.stride == 0:
-            backgrounds[i] = cv2.imencode(".png", bg.getBackgroundImage())[1].tobytes()
+            # JPEG, not PNG: long recordings keep thousands of these in memory
+            backgrounds[i] = cv2.imencode(".jpg", bg.getBackgroundImage(), [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()
     # keep tracks that live long enough and travel (rejects swaying trees, flicker)
     tracks = {}
     for i, objs in per_frame.items():
