@@ -523,6 +523,41 @@ qisqa jadvalda (72 epoxa) natija pastroq bo'lishi kutiladi.
 - Soxta teacher bilan CPU smoke test o'tdi. Haqiqiy DINOv2 og'irliklarini (ViT-S/14, ~90 MB)
   yuklash uchun ruxsat kerak.
 
+**O'z kameralarimizdan o'z-o'zini o'qitish (tashqi og'irliksiz, `data/pseudo.py`):**
+
+Statik kamera fonni soatlab ko'radi, shuning uchun harakatlanayotgan narsa yorliqsiz ham ajralib turadi.
+1. MOG2 fon modeli (OpenCV) fonni o'rganadi va foreground blob'larni ajratadi; soyalar chiqarib
+   tashlanadi.
+2. Blob'larga o'z trekerimiz ID beradi.
+3. Faqat uzoq yashagan **va** siljigan track'lar saqlanadi: shamolda tebranayotgan daraxt va
+   miltillash o'tib ketmaydi.
+4. Qisqa bo'shliqlar interpolatsiya qilinadi.
+5. **Yorliqsiz qolgan harakatlanuvchi blob'lar fon tasviri bilan bo'yaladi.** Shunda model haqiqiy
+   obyektni "fon" deb o'rganmaydi.
+6. Natija MOTChallenge formatida yoziladi (`scripts/make_pseudo_mot.py`), so'ng `train_track.py`
+   (obyektlik va re-ID) ishga tushadi, oxirida `train_sarbon.py --init` bilan COCO fine-tune qilinadi.
+
+Sifat `bench/pseudo_label_eval.py` bilan o'lchandi. Sintetik video: harakatlanuvchi obyektlar,
+shovqin, yorug'lik o'zgarishi va tebranuvchi "daraxt". Faqat o'qitishga yoziladigan kadrlar
+hisobga olindi.
+
+| Variant | Precision | Ko'rinadigan recall | ID tozaligi | Ko'rinadigan, yorliqsiz |
+|---|---|---|---|---|
+| Faqat track'lar | 0.864 | 0.529 | 0.963 | 47% |
+| + interpolatsiya | 0.863 | 0.533 | 0.963 | 47% |
+| **+ fon bilan bo'yash** | **0.863** | **0.627** | **0.963** | **32%** |
+
+Qolgan yorliqsiz obyektlarning asosiy sababi: ustma-ust tushgan obyektlar bitta blob'ga
+birlashadi. Haqiqiy kameradagi ko'rsatkichlar boshqacha bo'ladi va ular foydalanuvchi
+yozuvlarida o'lchanadi.
+
+Butun zanjir sinaldi: video fayl → psevdo-dataset → o'z-o'zini o'qitish → `--init`.
+
+**Pretraining strategiyasi, uchta variant o'lchov bilan solishtiriladi:**
+1. Scratch.
+2. DINOv2 distillyatsiya (navbatda).
+3. O'z kameralarimizdan o'z-o'zini o'qitish (foydalanuvchi yozuvlari kerak).
+
 ### Arxitektura qidiruvi (GPU'da, qisqa jadval, bir xil byudjet)
 
 | Savol | Variantlar | Mezon |

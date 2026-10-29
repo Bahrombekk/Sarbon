@@ -171,7 +171,10 @@ def main():
                   block_type=args.block, act=args.act).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
     if args.init:
-        sd = torch.load(args.init, map_location="cpu")
+        # stem + dense core only: works for distillation output and for full checkpoints from
+        # pseudo-label self-training (whose heads have a different class count)
+        sd = {k: v for k, v in torch.load(args.init, map_location="cpu").items()
+              if k.startswith(("stem.", "core."))}
         missing, unexpected = model.load_state_dict(sd, strict=False)
         assert not unexpected, unexpected[:5]
         print(f"init from {args.init}: {len(sd)} tensors (stem + core); heads start fresh")
