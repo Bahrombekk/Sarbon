@@ -34,31 +34,69 @@ class SimConfig:
     emb_dim: int = 64
     emb_noise: float = 0.35
     lookalike_groups: int = 4  # identities share a base appearance within a group
+    colors: int = 8  # clothing palette size (shared colours make colour alone ambiguous)
     seed: int = 0
+    # camera: pinhole, no roll, looking at a flat ground
+    cam_height: float = 4.0  # metres
+    focal: float = 1500.0  # pixels
+    horizon: float = 150.0  # image row of the horizon
+
+
+HIST_BINS = 12 * 4 * 2  # matches sarbon.track.appearance.BINS
+
+
+def _cloth_hist(rng, top, bottom, n_pix, mix=None):
+    """Simulated upper/lower HSV histograms: clothing colour + background, multinomial noise."""
+    out = []
+    for c in (top, bottom):
+        p = np.full(HIST_BINS, 0.3 / HIST_BINS)
+        p[c] += 0.7
+        if mix is not None:  # an occluder's colours bleed in
+            p = 0.5 * p + 0.5 * mix
+        out.append(rng.multinomial(n_pix, p / p.sum()) / n_pix)
+    return np.concatenate(out) / 2
 
 
 def simulate(cfg: SimConfig):
-    """-> list per frame of (gt_ids, gt_boxes, det_boxes, det_scores, det_feats)."""
+    """-> list per frame of (gt_ids, gt_boxes, det_boxes, det_scores, det_feats, det_colors).
+
+    People walk on the ground plane at 1.0-1.6 m/s (25 fps) and are projected through the
+    camera, so far people are small and slow in the image and approaching people grow
+    and speed up -- the case where image-plane constant velocity breaks.
+    """
     rng = np.random.default_rng(cfg.seed)
+    foc, hc, y0, cx = cfg.focal, cfg.cam_height, cfg.horizon, W / 2
+    z_near, z_far = foc * hc / (H - y0), 45.0  # depth range whose feet are inside the image
+
+    def project(X, Z, height):
+        y = y0 + foc * hc / Z
+        h = foc * height / Z
+        x = cx + foc * X / Z
+        return np.array([x - 0.21 * h, y - h, x + 0.21 * h, y])
+
+    def x_limit(Z):
+        return (W / 2) * Z / foc
+
     # pillars / trees / parked trucks: wide enough to hide a walker for 40-100 frames
     pillars = [np.array([x, 200, x + rng.uniform(120, 220), 1080]) for x in rng.uniform(250, 1500, cfg.pillars)]
     groups = rng.normal(size=(cfg.lookalike_groups, cfg.emb_dim))
+    palette = rng.choice(HIST_BINS, cfg.colors, replace=False)
     people, next_id, frames = [], 1, []
 
     def spawn():
         nonlocal next_id
-        h = rng.uniform(40, 200)
-        side = rng.integers(4)
-        x, y = [(0, rng.uniform(350, H)), (W, rng.uniform(350, H)), (rng.uniform(0, W), H),
-                (rng.uniform(0, W), 300)][side]
-        # walk through the scene towards a point on the opposite side (people pass by)
-        target = [(W, rng.uniform(350, H)), (0, rng.uniform(350, H)), (rng.uniform(0, W), 300),
-                  (rng.uniform(0, W), H)][side]
-        v = np.array(target, float) - np.array([x, y])
-        v = v / np.linalg.norm(v) * rng.uniform(0.8, 3.0) * h / 120
+        Z = rng.uniform(z_near + 1, z_far)
+        side = rng.integers(2)
+        X = (-1 if side == 0 else 1) * x_limit(Z) * 0.98
+        # walk across the scene towards a point on the other side, at another depth
+        Zt = rng.uniform(z_near + 1, z_far)
+        Xt = (1 if side == 0 else -1) * x_limit(Zt)
+        v = np.array([Xt - X, Zt - Z])
+        v = v / np.linalg.norm(v) * rng.uniform(1.0, 1.6) / 25.0
         app = groups[rng.integers(cfg.lookalike_groups)] * 0.8 + rng.normal(size=cfg.emb_dim) * 0.6
-        people.append({"id": next_id, "p": np.array([x, y], float), "v": v, "h": h,
-                       "app": app / np.linalg.norm(app)})
+        people.append({"id": next_id, "g": np.array([X, Z]), "v": v, "height": rng.normal(1.72, 0.08),
+                       "app": app / np.linalg.norm(app),
+                       "cloth": (palette[rng.integers(cfg.colors)], palette[rng.integers(cfg.colors)])})
         next_id += 1
 
     for _ in range(cfg.crowd):
@@ -66,27 +104,29 @@ def simulate(cfg: SimConfig):
     for _ in range(cfg.frames):
         if len(people) < cfg.crowd and rng.random() < 0.3:
             spawn()
-        for p in people:  # gentle random turns, feet position p
-            ang = rng.normal(0, 0.02)
+        for p in people:  # gentle random turns on the ground
+            ang = rng.normal(0, 0.01)
             c, s = np.cos(ang), np.sin(ang)
             p["v"] = np.array([[c, -s], [s, c]]) @ p["v"]
-            p["p"] += p["v"]
-        people = [p for p in people if -100 < p["p"][0] < W + 100 and 250 < p["p"][1] < H + 150]
+            p["g"] += p["v"]
+        people = [p for p in people if z_near < p["g"][1] < z_far + 5
+                  and abs(p["g"][0]) < x_limit(p["g"][1]) * 1.05]
         gts = []
         for p in people:
-            w = 0.42 * p["h"]
-            b = np.array([p["p"][0] - w / 2, p["p"][1] - p["h"], p["p"][0] + w / 2, p["p"][1]])
+            b = project(p["g"][0], p["g"][1], p["height"])
             vis_b = np.clip(b, [0, 0, 0, 0], [W, H, W, H])
             if (vis_b[2] - vis_b[0]) * (vis_b[3] - vis_b[1]) < 0.4 * (b[2] - b[0]) * (b[3] - b[1]):
                 continue
             gts.append((p, vis_b))
         boxes = np.array([g[1] for g in gts]).reshape(-1, 4)
         iou = iou_matrix(boxes, boxes)
-        dets, scores, feats = [], [], []
+        dets, scores, feats, colors = [], [], [], []
         for i, (p, b) in enumerate(gts):
-            occl = 0.0
+            occl, occluder = 0.0, None
             for j in range(len(gts)):  # people nearer the camera (larger bottom y) occlude
                 if j != i and gts[j][1][3] > b[3] and iou[i, j] > 0.15:
+                    if iou[i, j] > occl:
+                        occluder = gts[j][0]
                     occl = max(occl, iou[i, j])
             for pl in pillars:
                 ov = iou_matrix(b[None], pl[None])[0, 0]
@@ -104,14 +144,20 @@ def simulate(cfg: SimConfig):
             scores.append(float(np.clip(rng.normal(0.85 - 0.6 * occl, 0.1), 0.02, 0.99)))
             f = p["app"] + rng.normal(0, cfg.emb_noise * (1 + 2 * occl), cfg.emb_dim) / np.sqrt(cfg.emb_dim) * 4
             feats.append(f)
+            mix = None
+            if occluder is not None:
+                mix = _cloth_hist(rng, *occluder["cloth"], 10_000)[:HIST_BINS] * 2
+            colors.append(_cloth_hist(rng, *p["cloth"], max(30, int(h * h * 0.42 * 0.15)), mix))
         for _ in range(rng.poisson(cfg.fp_rate)):
             h = rng.uniform(30, 160)
             x, y = rng.uniform(0, W - 0.4 * h), rng.uniform(250, H - h)
             dets.append(np.array([x, y, x + 0.42 * h, y + h]))
             scores.append(float(rng.uniform(0.05, 0.5)))
             feats.append(rng.normal(size=cfg.emb_dim))
+            colors.append(_cloth_hist(rng, *rng.choice(HIST_BINS, 2), 100))
         frames.append(([g[0]["id"] for g in gts], boxes, np.array(dets).reshape(-1, 4),
-                       np.array(scores), np.array(feats).reshape(-1, cfg.emb_dim)))
+                       np.array(scores), np.array(feats).reshape(-1, cfg.emb_dim),
+                       np.array(colors).reshape(-1, 2 * HIST_BINS)))
     return frames
 
 
@@ -161,27 +207,38 @@ def evaluate(frames, outputs, thr=0.5):
 
 
 def run(frames, cfg):
-    tr = SarbonTracker(cfg)
-    return [tr.update(b, s, f) for _, _, b, s, f in frames]
+    tr = SarbonTracker(cfg, (W, H))
+    out = [tr.update(b, s, f, c) for _, _, b, s, f, c in frames]
+    return out, tr
 
 
 VARIANTS = {
     "ByteTrack (Ultralytics default logic)": TrackerConfig(),
-    "+ NSA Kalman": TrackerConfig(nsa=True),
-    "+ OC-SORT ORU": TrackerConfig(oru=True),
-    "+ OC-SORT OCR": TrackerConfig(ocr=True),
-    "+ OC-SORT OCM": TrackerConfig(ocm=0.2),
     "+ embeddings (BoT-SORT-style)": TrackerConfig(emb=True),
-    "+ long-term memory re-ID (Sarbon)": TrackerConfig(emb=True, reid=True),
-    "Sarbon: re-ID + ORU + NSA": TrackerConfig(emb=True, reid=True, oru=True, nsa=True),
+    "re-ID: embedding": TrackerConfig(emb=True, reid=True),
+    "re-ID: colour only": TrackerConfig(color=1.0, reid=True),
+    "re-ID: embedding + colour": TrackerConfig(emb=True, color=0.4, reid=True),
+    "re-ID + ground plane": TrackerConfig(emb=True, reid=True, ground=True),
+    "re-ID + ground + colour": TrackerConfig(emb=True, color=0.4, reid=True, ground=True),
+    "re-ID colour + ground": TrackerConfig(color=1.0, reid=True, ground=True),
+    "re-ID embedding + colour(0.7) + ground": TrackerConfig(emb=True, color=0.7, reid=True, ground=True),
+    "Sarbon: re-ID + ground + colour + size prior": TrackerConfig(emb=True, color=0.7, reid=True,
+                                                                  ground=True, size_prior=True),
 }
 
 
 if __name__ == "__main__":
     seqs = [simulate(SimConfig(seed=s, crowd=c)) for s, c in ((0, 12), (1, 18), (2, 28))]
-    print(f"{'tracker':40s} {'MOTA':>6s} {'IDF1':>6s} {'IDSW':>5s} {'FP':>5s} {'FN':>6s} {'IDs':>5s}")
+    print("true camera: horizon y0=150px, height Hc=4.00m (the tracker must find these itself)")
+    print(f"{'tracker':46s} {'MOTA':>6s} {'IDF1':>6s} {'IDSW':>5s} {'FP':>5s} {'FN':>6s} {'IDs':>5s}")
     for name, cfg in VARIANTS.items():
-        r = [evaluate(f, run(f, cfg)) for f in seqs]
+        r, calib = [], []
+        for f in seqs:
+            out, tr = run(f, cfg)
+            r.append(evaluate(f, out))
+            if tr.gm.ready:
+                calib.append(f"y0={tr.gm.y0:.0f}px Hc={tr.gm.cam_height:.2f}m")
         avg = {k: np.mean([x[k] for x in r]) for k in r[0]}
-        print(f"{name:40s} {avg['MOTA']:6.1f} {avg['IDF1']:6.1f} {avg['IDSW']:5.0f} "
-              f"{avg['FP']:5.0f} {avg['FN']:6.0f} {avg['pred_ids']:5.0f} (GT {avg['GT_ids']:.0f})")
+        print(f"{name:46s} {avg['MOTA']:6.1f} {avg['IDF1']:6.1f} {avg['IDSW']:5.0f} "
+              f"{avg['FP']:5.0f} {avg['FN']:6.0f} {avg['pred_ids']:5.0f} (GT {avg['GT_ids']:.0f})"
+              + (f"  calib: {calib[0]}" if calib else ""))

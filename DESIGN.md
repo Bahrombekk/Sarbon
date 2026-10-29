@@ -314,6 +314,37 @@ Bu natija sintetik sahnada olingan. Haqiqiy isbot uchun MOT20 (statik kameralar)
 TrackEval HOTA kerak. Ultralytics bilan ikki holatda solishtiriladi: standart sozlamalari bilan
 **va** sozlangan buferi bilan.
 
+**Yer tekisligi, chuqurlik va rang (2026-10-29):**
+- `sarbon/track/ground.py`: **o'z-o'zini kalibrlaydigan yer tekisligi.** To'silmagan, ishonchli
+  track'lardan `h = a·(y − y0)` bog'liqligi robust (Huber) usulda o'rganiladi. Natijada gorizont y0
+  va kamera balandligi Hc = 1.7 / a topiladi. Undan har bir odamning yerdagi joyi (X metr) va
+  kameradan masofasi Z (**chuqurlik**) chiqadi, chuqurlik tarmog'i kerak emas. Harakat metrlarda,
+  shovqin kamera orqali propagatsiya qilinadi (UCMCTrack uslubi). Re-ID ekstrapolyatsiyasi ham yerda.
+- `sarbon/track/appearance.py`: **rang deskriptori.** Gavdaning yuqori va pastki yarmining HSV
+  gistogrammasi, Bhattacharyya masofasi bilan solishtiriladi.
+- Simulyator endi haqiqiy kamera geometriyasiga ega: balandligi 4 m, fokus 1500 px, odamlar 7–45 m
+  masofada 1.0–1.6 m/s tezlikda yuradi. Har kimning kiyim rangi bor, 8 rangli palitra bo'lgani
+  uchun ranglar takrorlanadi.
+
+| Treker (sintetik, 3 sahna, GT 26 kishi) | MOTA | IDF1 | IDsw | ID'lar |
+|---|---|---|---|---|
+| ByteTrack (Ultralytics standarti) | 57.0 | 42.8 | 70 | 64 |
+| re-ID: embedding | 57.4 | 54.9 | 52 | 44 |
+| re-ID: faqat rang | 58.1 | 67.6 | 33 | 30 |
+| re-ID: embedding + yer tekisligi | 57.2 | 57.5 | 51 | 45 |
+| **re-ID: rang + yer tekisligi** | **58.1** | **70.6** | **28** | **30** |
+
+Kalibrlash: treker gorizontni **129 px** deb topdi (haqiqiysi 150), kamera balandligini esa
+**4.26 m** (haqiqiysi 4.00).
+
+Saboq: yer tekisligi IoU o'rniga asosiy xarajat sifatida ishlatilganda **zarar qildi**
+(FP 1 → 144). Uzoq masofada chuqurlik noaniqligi bir necha metrga yetadi va soxta aniqlashlar ham
+"mumkin" bo'lib qoladi. U darvoza va jarima sifatida ishlatilganda foyda beradi.
+
+Cheklov: bu simulyatorda embedding ataylab shovqinli qilingan (hali ID loss bilan o'qitilmagan),
+rang esa informativ. Haqiqiy sahnada yorug'lik rangni o'zgartiradi. Og'irliklar MOT20/MEVA'da
+qayta sozlanadi.
+
 **Keyingi treking qadamlari (tadqiqot bo'yicha tartiblangan):**
 1. Decoder embedding'ini ID loss bilan o'qitish (QDTrack yoki MOTIP uslubi). EMA'da confidence og'irligi
    ishlatiladi (Deep OC-SORT).
