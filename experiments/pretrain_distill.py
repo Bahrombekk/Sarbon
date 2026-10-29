@@ -81,6 +81,7 @@ def main():
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/pretrain")
+    ap.add_argument("--limit", type=int, default=None, help="use only N images (smoke tests)")
     args = ap.parse_args()
     torch.manual_seed(0)
     device = torch.device(args.device)
@@ -89,13 +90,13 @@ def main():
     else:
         size = args.img
         # all classes: every commercially licensed COCO image is useful without labels
-        ds = MosaicDetection(CocoDetection(args.coco, "train2017", size, ALL), prob=0.3)
+        ds = MosaicDetection(CocoDetection(args.coco, "train2017", size, ALL, limit=args.limit), prob=0.3)
     dl = DataLoader(ds, args.batch, shuffle=True, num_workers=args.workers, collate_fn=collate,
                     drop_last=True, persistent_workers=args.workers > 0)
     if args.fake_teacher:
         teacher = FakeTeacher()
     else:
-        teacher = torch.hub.load("facebookresearch/dinov2", args.teacher)
+        teacher = torch.hub.load("facebookresearch/dinov2", args.teacher, trust_repo=True)
     teacher = teacher.to(device).eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
