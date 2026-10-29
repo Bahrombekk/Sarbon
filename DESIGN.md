@@ -345,6 +345,22 @@ Cheklov: bu simulyatorda embedding ataylab shovqinli qilingan (hali ID loss bila
 rang esa informativ. Haqiqiy sahnada yorug'lik rangni o'zgartiradi. Og'irliklar MOT20/MEVA'da
 qayta sozlanadi.
 
+**To'liq video pipeline (`sarbon/pipeline.py`, 2026-10-29):**
+- O'qitilgan stem BN'i yig'ilib `LocalBackbone`'ga aylantiriladi (`sparse/convert.py`, xato 1.5e-6).
+  U fused sparse engine'da ishlaydi va detektor tayyor p8 xaritasini qabul qiladi.
+- Har kamera uchun alohida `SarbonTracker` ishlaydi: embedding, rang va yer tekisligi bilan.
+- **Track-steered gate** (`engine.set_extra`): `tau>0` bo'lganda track'larning bashorat qilingan
+  bloklari har kadrda majburan qayta hisoblanadi. Fon keshda qoladi, obyektlar yangi bo'ladi.
+- GPU testi: sparse pipeline 12 kadr davomida dense stem bilan bir xil feature beradi
+  (fp16'da 1.6e-3). Kechikish hali o'lchanmagan: GPU o'qitish bilan band.
+
+**Re-ID o'qitish (`experiments/train_track.py`):**
+- Detektorda `id_head` bor: normallashtirilgan 128 o'lchamli embedding.
+- Klip bo'yicha SupCon loss (`criterion.id_contrastive`) ishlatiladi.
+- MOTChallenge formatidagi klip loader (`data/mot.py`) bor.
+- Sintetik smoke test: ID loss 3.6 → 0.01, ko'rilmagan videolarda retrieval top-1 0.63 → 0.79.
+  Keyin pasaydi: 48 ta ID'ni yodlab olish. Haqiqiy natija uchun MEVA yoki SmartSpaces kerak.
+
 **Keyingi treking qadamlari (tadqiqot bo'yicha tartiblangan):**
 1. Decoder embedding'ini ID loss bilan o'qitish (QDTrack yoki MOTIP uslubi). EMA'da confidence og'irligi
    ishlatiladi (Deep OC-SORT).

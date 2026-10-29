@@ -12,7 +12,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
-from sarbon.models.sarbon_det import build  # noqa: E402
+from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
 from sarbon.pipeline import SarbonVideo  # noqa: E402
 from scenes import Camera  # noqa: E402
 
@@ -21,7 +21,7 @@ def main(ckpt=None):
     torch.manual_seed(0)
     det = build("s", 6, halo_zero=False)
     if ckpt:
-        det.load_state_dict(torch.load(ckpt, map_location="cpu"))
+        load_weights(det, ckpt)
         print(f"loaded {ckpt}")
     video = SarbonVideo(det, n_cams=2, size=(640, 1152), device="cuda", keep_score=0.3)
     cams = [Camera(720, 1280, "moderate", seed=s, device="cuda") for s in range(2)]

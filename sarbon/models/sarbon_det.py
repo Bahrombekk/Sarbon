@@ -45,6 +45,7 @@ class SarbonConfig:
     block_type: str = "res"  # "res" | "rep" (RepVGG, fused for inference) | "dw" (inverted bottleneck)
     act: str = "relu"  # "relu" | "silu" | "gelu"
     fusion: str = "concat"  # neck fusion: "concat" | "weighted" (BiFPN) | "gated" (per-pixel)
+    id_dim: int = 128  # re-identification embedding size
     num_denoising: int = 100  # contrastive denoising queries during training (0 = off)
     label_noise: float = 0.5
     box_noise: float = 1.0
@@ -192,6 +193,9 @@ class SarbonDetector(nn.Module):
                                           for _ in range(cfg.dec_layers))
         self.register_buffer("project", fdr_project(cfg.reg_max, 0.5, cfg.reg_scale), persistent=False)
         self.dn_label = nn.Embedding(num_classes + 1, d)  # last row: padding
+        # identity embedding for re-identification (trained with an ID contrastive loss on
+        # video clips; until then it is an untrained projection and the tracker leans on colour)
+        self.id_head = mlp(d, d, cfg.id_dim, 2)
         self._reset()
 
     def _reset(self):
@@ -355,7 +359,8 @@ class SarbonDetector(nn.Module):
                     "aux": [{"pred_logits": l[:, sl], "pred_boxes": b[:, sl], "pred_corners": c[:, sl]}
                             for l, b, c in zip(logits[:-1], boxes[:-1], corners_all[:-1])]}
 
-        out.update(pack(slice(n_dn, None)), n_track=n_track, embed=tgt[:, n_dn:], boxes=boxes[-1][:, n_dn:])
+        out.update(pack(slice(n_dn, None)), n_track=n_track, embed=tgt[:, n_dn:], boxes=boxes[-1][:, n_dn:],
+                   id_embed=F.normalize(self.id_head(tgt[:, n_dn:]).float(), dim=-1))
         if n_dn:
             out["dn"] = {**pack(slice(0, n_dn)), "matches": dn_matches, "groups": groups}
         return out
@@ -364,3 +369,13 @@ class SarbonDetector(nn.Module):
 def build(size="s", num_classes=6, **overrides):
     cfg = SarbonConfig(**{**SIZES[size].__dict__, **overrides})
     return SarbonDetector(num_classes, cfg)
+
+
+def load_weights(model, path):
+    """Load a checkpoint; heads added after it was trained (id_head) may be missing."""
+    sd = torch.load(path, map_location="cpu")
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    bad = [k for k in missing if not k.startswith("id_head.")] + list(unexpected)
+    if bad:
+        raise RuntimeError(f"checkpoint mismatch: {bad[:5]}")
+    return model

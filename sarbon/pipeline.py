@@ -109,7 +109,7 @@ class SarbonVideo:
             boxes = (boxes_all[i, keep] * torch.tensor([self.w, self.h, self.w, self.h], device=self.dev)).cpu().numpy()
             boxes = boxes * np.r_[scale, scale]
             sc, lb = s[keep].cpu().numpy(), lab[keep].cpu().numpy()
-            emb = out["embed"][i, keep].float().cpu().numpy()
+            emb = out.get("id_embed", out["embed"])[i, keep].float().cpu().numpy()
             col = np.stack([color_descriptor(frames[i], b) for b in boxes]) if self.use_color and len(boxes) else None
             tracks = self.trackers[i].update(boxes, sc, emb, col)
             res = []

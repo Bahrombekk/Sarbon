@@ -85,6 +85,27 @@ def mal_loss(logits, target_q, pos_mask, gamma=1.5):
     return (F.binary_cross_entropy_with_logits(logits, t, reduction="none") * w).sum()
 
 
+def id_contrastive(embs, ids, temperature=0.07):
+    """Supervised contrastive loss (SupCon, 2004.11362) over identity embeddings.
+
+    embs: [M, D] L2-normalised embeddings of matched queries from all frames of a clip
+    batch; ids: [M] global identity labels (unique per video). Anchors are pulled towards
+    the same identity in other frames and pushed from every other identity.
+    """
+    if len(ids) < 2:
+        return embs.sum() * 0
+    sim = embs @ embs.T / temperature
+    eye = torch.eye(len(ids), dtype=torch.bool, device=embs.device)
+    pos = (ids[:, None] == ids[None]) & ~eye
+    has = pos.any(1)
+    if not has.any():
+        return embs.sum() * 0
+    logits = sim.masked_fill(eye, float("-inf"))
+    log_prob = logits - torch.logsumexp(logits, 1, keepdim=True)
+    loss = -(log_prob.masked_fill(~pos, 0).sum(1) / pos.sum(1).clamp(min=1))
+    return loss[has].mean()
+
+
 class SetCriterion(nn.Module):
     def __init__(self, num_classes, matcher=None, cls_loss="mal", w_cls=1.0, w_l1=5.0, w_giou=2.0,
                  w_fgl=0.15, w_ddf=1.5, reg_scale=4.0, project=None, ddf_t=5.0):
