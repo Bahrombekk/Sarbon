@@ -131,6 +131,10 @@ def main():
     ap.add_argument("--nwd", type=float, default=0.0, help="NWD weight in the matching cost")
     ap.add_argument("--no-halo-zero", action="store_true")
     ap.add_argument("--limit", type=int, default=None, help="use only N train/val images (smoke tests)")
+    ap.add_argument("--fusion", default="concat", choices=["concat", "weighted", "gated"])
+    ap.add_argument("--block", default="res", choices=["res", "rep", "dw"])
+    ap.add_argument("--act", default="relu", choices=["relu", "silu", "gelu"])
+    ap.add_argument("--tag", default="", help="suffix for the output folder (ablations)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/sarbon")
     args = ap.parse_args()
@@ -162,16 +166,17 @@ def main():
     val_dl = DataLoader(val_ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
                         persistent_workers=args.workers > 0)
 
-    model = build(args.size, num_classes, halo_zero=not args.no_halo_zero).to(device)
+    model = build(args.size, num_classes, halo_zero=not args.no_halo_zero, fusion=args.fusion,
+                  block_type=args.block, act=args.act).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
     crit = SetCriterion(num_classes, HungarianMatcher(w_nwd=args.nwd), project=model.project)
     opt = torch.optim.AdamW(param_groups(model, args.wd), args.lr, betas=(0.9, 0.999))
     steps = args.epochs * len(train_dl)
-    warm = min(2000, steps // 20)
+    warm = max(1, min(2000, steps // 20))
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda i: min(1.0, (i + 1) / warm) * (0.5 * (1 + math.cos(math.pi * min(i, steps) / steps)) * 0.95 + 0.05))
     ema = ModelEMA(model)
-    out_dir = Path(args.out) / f"{args.size}{'_bench' if args.benchmark else ''}"
+    out_dir = Path(args.out) / f"{args.size}{'_bench' if args.benchmark else ''}{args.tag}"
     out_dir.mkdir(parents=True, exist_ok=True)
     log, best, t0 = [], -1.0, time.time()
     for ep in range(args.epochs):

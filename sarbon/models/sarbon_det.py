@@ -44,6 +44,7 @@ class SarbonConfig:
     reg_scale: float = 4.0
     block_type: str = "res"  # "res" | "rep" (RepVGG, fused for inference) | "dw" (inverted bottleneck)
     act: str = "relu"  # "relu" | "silu" | "gelu"
+    fusion: str = "concat"  # neck fusion: "concat" | "weighted" (BiFPN) | "gated" (per-pixel)
     num_denoising: int = 100  # contrastive denoising queries during training (0 = off)
     label_noise: float = 0.5
     box_noise: float = 1.0
@@ -73,6 +74,37 @@ def fuse(cin, cout):
                          nn.ReLU(inplace=True))
 
 
+class DynamicFuse(nn.Module):
+    """Fuse two same-width feature maps with learned weights, then mix (1x1 + dw 3x3).
+
+    weighted: BiFPN fast normalised fusion (1911.09070) -- one learned, non-negative
+              weight per input, shared over the whole map;
+    gated   : a per-pixel softmax gate (1x1 conv on both inputs) decides, location by
+              location, how much to trust each scale; starts as a plain average.
+    """
+
+    def __init__(self, d, mode):
+        super().__init__()
+        self.mode = mode
+        if mode == "weighted":
+            self.w = nn.Parameter(torch.ones(2))
+        else:
+            self.gate = nn.Conv2d(2 * d, 2, 1)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.zeros_(self.gate.bias)
+        self.mix = fuse(d, d)
+
+    def weights(self, a, b):
+        if self.mode == "weighted":
+            w = F.relu(self.w)
+            return (w / (w.sum() + 1e-4)).view(1, 2, 1, 1).expand(a.shape[0], 2, *a.shape[-2:])
+        return self.gate(torch.cat([a, b], 1)).softmax(1)
+
+    def forward(self, a, b):
+        w = self.weights(a, b)
+        return self.mix(w[:, :1] * a + w[:, 1:] * b)
+
+
 def sincos_2d(h, w, dim, device, temperature=10000.0):
     y, x = torch.meshgrid(torch.arange(h, device=device, dtype=torch.float32),
                           torch.arange(w, device=device, dtype=torch.float32), indexing="ij")
@@ -95,9 +127,15 @@ class DenseCore(nn.Module):
                                           for c in (c8, cfg.c16, cfg.c32))
         self.aifi = nn.TransformerEncoderLayer(d, cfg.heads, cfg.ffn, 0.0, batch_first=True,
                                                activation="gelu")
-        self.td16, self.td8 = fuse(2 * d, d), fuse(2 * d, d)
+        # "concat" keeps the original module layout so existing checkpoints still load
+        self.fusion = cfg.fusion
+        mk = (lambda: fuse(2 * d, d)) if cfg.fusion == "concat" else (lambda: DynamicFuse(d, cfg.fusion))
+        self.td16, self.td8 = mk(), mk()
         self.down8, self.down16 = conv_bn_act(d, d, 2), conv_bn_act(d, d, 2)
-        self.bu16, self.bu32 = fuse(2 * d, d), fuse(2 * d, d)
+        self.bu16, self.bu32 = mk(), mk()
+
+    def _fuse(self, m, a, b):
+        return m(torch.cat([a, b], 1)) if self.fusion == "concat" else m(a, b)
 
     def forward(self, p8):
         p16 = self.to16(p8)
@@ -109,10 +147,10 @@ class DenseCore(nn.Module):
         # attention only at stride 32: global context for <1/1000 of the pixels
         t = self.aifi(t + pos) - pos
         x32 = t.transpose(1, 2).reshape(b, d, h, w)
-        t16 = self.td16(torch.cat([x16, F.interpolate(x32, scale_factor=2.0)], 1))
-        o8 = self.td8(torch.cat([x8, F.interpolate(t16, scale_factor=2.0)], 1))
-        o16 = self.bu16(torch.cat([t16, self.down8(o8)], 1))
-        o32 = self.bu32(torch.cat([x32, self.down16(o16)], 1))
+        t16 = self._fuse(self.td16, x16, F.interpolate(x32, scale_factor=2.0))
+        o8 = self._fuse(self.td8, x8, F.interpolate(t16, scale_factor=2.0))
+        o16 = self._fuse(self.bu16, t16, self.down8(o8))
+        o32 = self._fuse(self.bu32, x32, self.down16(o16))
         return [o8, o16, o32]
 
 
