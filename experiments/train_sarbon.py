@@ -135,6 +135,7 @@ def main():
     ap.add_argument("--block", default="res", choices=["res", "rep", "dw"])
     ap.add_argument("--act", default="relu", choices=["relu", "silu", "gelu"])
     ap.add_argument("--tag", default="", help="suffix for the output folder (ablations)")
+    ap.add_argument("--init", help="pretrained stem+core weights (pretrain_distill.py output)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/sarbon")
     args = ap.parse_args()
@@ -169,6 +170,11 @@ def main():
     model = build(args.size, num_classes, halo_zero=not args.no_halo_zero, fusion=args.fusion,
                   block_type=args.block, act=args.act).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
+    if args.init:
+        sd = torch.load(args.init, map_location="cpu")
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        assert not unexpected, unexpected[:5]
+        print(f"init from {args.init}: {len(sd)} tensors (stem + core); heads start fresh")
     crit = SetCriterion(num_classes, HungarianMatcher(w_nwd=args.nwd), project=model.project)
     opt = torch.optim.AdamW(param_groups(model, args.wd), args.lr, betas=(0.9, 0.999))
     steps = args.epochs * len(train_dl)

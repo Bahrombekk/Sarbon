@@ -514,6 +514,15 @@ Reja: DINOv2 (Apache-2.0) feature'laridan stem va dense yadroga distillyatsiya q
 litsenziyali rasmlarda (Open Images, filtrlangan COCO) yorliqsiz amalga oshiriladi. Shu qilinmaguncha
 qisqa jadvalda (72 epoxa) natija pastroq bo'lishi kutiladi.
 
+**Pretraining (`experiments/pretrain_distill.py`):**
+- Teacher: DINOv2 (Apache-2.0), muzlatilgan holda.
+- Student: Sarbon stem va dense yadro.
+- Student'ning stride-16 feature'lari teacher patch tokenlariga cosine loss bilan yaqinlashtiriladi.
+- Yorliq kerak emas: barcha tijoriy litsenziyali COCO rasmlari, keyinchalik Open Images ishlatiladi.
+- Natija `train_sarbon.py --init` orqali yuklanadi.
+- Soxta teacher bilan CPU smoke test o'tdi. Haqiqiy DINOv2 og'irliklarini (ViT-S/14, ~90 MB)
+  yuklash uchun ruxsat kerak.
+
 ### Arxitektura qidiruvi (GPU'da, qisqa jadval, bir xil byudjet)
 
 | Savol | Variantlar | Mezon |
