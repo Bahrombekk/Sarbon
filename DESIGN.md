@@ -281,6 +281,52 @@ Halo-zero'ni qutqarish g'oyalari (keyinroq sinash mumkin):
 - (b) blok chegaralarini kadrlar orasida siljitish (shifted blocks, Swin uslubi);
 - (c) halo-zero'ni faqat stride 2/4 da qo'llab, stride 8'ni oddiy qoldirish.
 
+### Treking: Ultralytics'dan o'tish (2026-10-29)
+
+**Baseline (Ultralytics `main` manbasidan, faqat faktlar uchun o'qildi):**
+- ByteTrack sozlamalari: high 0.25, low 0.1, new 0.25, buffer 30 kadr, match 0.8.
+- BoT-SORT'da ReID standart holatda o'chiq. Yoqilganda ham faqat IoU ≥ 0.5 bo'lgan joyda ishlaydi.
+- Bufer 30 kadr, ya'ni taxminan 1 soniya.
+
+Demak uzoq yashiringan odam doim yangi ID oladi. Statik kamerada bu eng ko'p uchraydigan xato: ustun,
+daraxt yoki mashina orqasidan o'tish.
+
+**`sarbon/track/tracker.py`:** o'z kodimiz, g'oyalar MIT litsenziyali maqolalardan. ByteTrack mantig'i
+asosida, har bir yaxshilanish alohida yoqiladi: NSA Kalman, OC-SORT ORU/OCR/OCM, embedding va
+**uzoq muddatli xotira re-ID**. Re-ID: yo'qolgan track 300 kadrgacha saqlanadi va embedding, harakat
+ehtimoli (|v|·vaqt) hamda o'lcham bo'yicha qayta topiladi. IoU talab qilinmaydi.
+
+**`bench/mot_sim.py`:** sintetik statik kamera MOT benchmarki.
+- Sahna: odamlar kadrni kesib o'tadi, bir-birini to'sadi, 120–220 px kenglikdagi to'siqlar orqasida
+  yashirinadi.
+- Shovqin: yolg'on aniqlashlar, bir-biriga o'xshash kiyimdagi odamlar guruhlari.
+- Metrikalar: MOTA, IDF1, IDsw. 3 ta sahna, har biri 600 kadr.
+
+| Treker | MOTA | IDF1 | IDsw | ID (GT 26) |
+|---|---|---|---|---|
+| ByteTrack (Ultralytics standarti) | 63.9 | 62.9 | 21 | 43 |
+| + BoT-SORT uslubidagi embedding | 63.9 | 62.9 | 21 | 43 |
+| + OC-SORT ORU / OCR / NSA | ≈ teng | ≈ teng | — | — |
+| **+ uzoq xotira re-ID (Sarbon)** | **64.1** | **70.9** | **15** | **35** |
+| re-ID + ORU + NSA | 64.0 | 67.5 | 20 | 39 |
+
+Bu natija sintetik sahnada olingan. Haqiqiy isbot uchun MOT20 (statik kameralar), MEVA va
+TrackEval HOTA kerak. Ultralytics bilan ikki holatda solishtiriladi: standart sozlamalari bilan
+**va** sozlangan buferi bilan.
+
+**Keyingi treking qadamlari (tadqiqot bo'yicha tartiblangan):**
+1. Decoder embedding'ini ID loss bilan o'qitish (QDTrack yoki MOTIP uslubi). EMA'da confidence og'irligi
+   ishlatiladi (Deep OC-SORT).
+2. **Yer tekisligida treking** (UCMCTrack, MIT): MOT17 val'da IDF1 77.1 → 82.2. Kamera harakati
+   kompensatsiyasi o'chiriladi, chunki u statik kamerada zarar qiladi.
+3. **Yangi g'oya: o'z-o'zini kalibrlaydigan yer tekisligi.** Ishonchli track'lardan odam bo'yi va oyoq
+   satri bog'liqligi o'rganiladi, undan gorizont va homografiya chiqariladi. Bu UCMC'ni qo'lda
+   kalibrlashsiz ishlatish imkonini beradi.
+4. DETR uchun past ishonchli dublikatlarni stage 2 dan oldin bostirish. Faol track'ga yopishgan
+   tug'ilishlarni bloklash (TrackTrack TAI). Track'ni 2–3 hit'dan keyin tasdiqlash.
+5. Har bir hujayra uchun sahna prior'larini online o'rganish: tug'ilish/o'lim zonalari, tezlik
+   va o'lcham prior'i, takrorlanuvchi yolg'on aniqlashlar banki.
+
 ### Ma'lumotlar (litsenziya, tijoriy foydalanish)
 
 - **Pretraining:**
