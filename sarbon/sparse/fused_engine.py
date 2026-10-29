@@ -72,6 +72,8 @@ class FusedSparseEngine:
         # static buffers shared by all graphs
         self.frames = torch.zeros(n_cams, height, width, 3, device=device, dtype=dtype)
         self.changed = torch.zeros(n_cams, self.hb, self.wb, device=device, dtype=torch.bool)
+        # blocks that must be recomputed regardless of pixel change (track-steered gate)
+        self.extra = torch.zeros_like(self.changed)
         self.masks = {d: self.changed.clone() for d in self.ds}
         self.count = torch.zeros((), device=device, dtype=torch.int64)
         self.count_host = torch.zeros((), dtype=torch.int64).pin_memory()
@@ -139,7 +141,7 @@ class FusedSparseEngine:
         b = self.block
         diff = (self.frames - self.cache["img"]).abs().view(
             self.n, self.hb, b, self.wb, b, 3).sum((2, 4, 5), dtype=torch.float32)
-        changed = diff > self.tau * b * b * 3
+        changed = (diff > self.tau * b * b * 3) | self.extra
         if self.refresh:  # bounded staleness for tau > 0: every block recomputed every `refresh` steps
             changed |= (self.lin % self.refresh) == (self.tick % self.refresh)
             self.tick += 1
@@ -195,6 +197,12 @@ class FusedSparseEngine:
         if g is None:
             g = self.sparse_graphs[cap] = self._capture(lambda: self._sparse(cap))
         return g
+
+    def set_extra(self, mask):
+        """Blocks [N, Hb, Wb] to recompute next step whatever their pixel change (e.g. where
+        tracks are predicted to be). With tau > 0 this keeps tracked objects fresh while the
+        static background stays cached; with tau = 0 it only adds work."""
+        self.extra.copy_(mask)
 
     @torch.no_grad()
     def reset(self, frames):

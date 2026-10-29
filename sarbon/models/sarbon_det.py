@@ -285,16 +285,18 @@ class SarbonDetector(nn.Module):
         valid = ((a > 0.01) & (a < 0.99)).all(-1, keepdim=True)
         return inverse_sigmoid(a).masked_fill(~valid, float("inf")).to(dtype), valid
 
-    def forward(self, img, tracks=None, targets=None):
+    def forward(self, img, tracks=None, targets=None, p8=None):
         """img [B, 3, H, W] normalised. tracks: optional {"embed": [B, T, D], "boxes": [B, T, 4]}.
         targets (training only): enables contrastive denoising queries.
+        p8: stride-8 stem features computed elsewhere (the block-sparse video engine);
+        when given, `img` is not used.
 
         Returns a dict with per-layer predictions (last layer first-class), the encoder
         proposals (for their own loss) and `embed`/`boxes` to feed back as tracks.
         Queries [0, T) are the track queries, the rest are new; denoising outputs, if
         any, are returned separately under "dn".
         """
-        feats = self.features(img)
+        feats = self.features(img) if p8 is None else self.core(p8)
         shapes = [f.shape[-2:] for f in feats]
         memory = torch.cat([f.flatten(2).transpose(1, 2) for f in feats], 1)  # [B, S, D]
         anchors, valid = self.anchors(shapes, memory.device, memory.dtype)
