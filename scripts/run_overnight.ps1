@@ -3,7 +3,7 @@
 #   Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','D:\Sarbon\scripts\run_overnight.ps1'
 # COCO lives on the NVMe drive: on the D: HDD random JPEG reads starved the GPU (~48 img/s).
 param([string]$Coco = "C:\data\coco", [string]$Runs = "D:\Sarbon\runs", [int]$Workers = 12,
-      [string[]]$Variants = @("standard", "halo"), [switch]$SkipTests)
+      [string[]]$Variants = @("standard", "halo"), [switch]$SkipTests, [switch]$NoHaloZero)
 $py = "D:\Sarbon\.venv\Scripts\python.exe"
 $log = "$Runs\overnight.log"
 New-Item -ItemType Directory -Force "$Runs\halo_zero", "$Runs\sarbon" | Out-Null
@@ -20,7 +20,7 @@ if (-not $SkipTests) {
     Log "test_block_local exit $LASTEXITCODE"
 }
 
-foreach ($v in $Variants) {
+foreach ($v in $Variants | Where-Object { $_ -ne "none" }) {
     Log "ablation $v start"
     & $py -u D:\Sarbon\experiments\halo_zero_ablation.py --coco $Coco --variant $v --epochs 24 `
         --batch 32 --workers $Workers --out "$Runs\halo_zero" *> "$Runs\halo_zero\$v.log"
@@ -28,7 +28,9 @@ foreach ($v in $Variants) {
 }
 
 Log "sarbon-s start"
+$extra = @()
+if ($NoHaloZero) { $extra += "--no-halo-zero" }
 & $py -u D:\Sarbon\experiments\train_sarbon.py --coco $Coco --size s --epochs 72 --batch 16 `
-    --workers $Workers --out "$Runs\sarbon" *> "$Runs\sarbon\train_s.log"
+    --workers $Workers --out "$Runs\sarbon" @extra *> "$Runs\sarbon\train_s.log"
 Log "sarbon-s exit $LASTEXITCODE"
 Log "queue done"

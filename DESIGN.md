@@ -257,6 +257,30 @@ kesishmaydigan patchify qadamining CNN analogi; RF-DETR va LW-DETR shu tamoyilda
 - **Qaror qoidasi:** AP pasayishi ≤ 1.0 va AP_small pasayishi ≤ 1.5 bo'lsa, halo-zero qabul qilinadi.
   Aks holda cell-level gating bilan halo engine'da qolinadi (u ham aniq, ham 25–29% tejaydi).
 
+**Ablation natijasi (2026-10-29, RTX 5090):**
+- Sinov detektori: CenterNet uslubi.
+- Data: COCO, 6 klass, faqat tijoriy litsenziyali 18 143 rasm. Baholash val2017'ning 2 968 rasmida.
+- O'qitish: 24 epoxa, 640 px, noldan.
+
+| Epoxa | Oddiy AP | Halo-zero AP |
+|---|---|---|
+| 8 | 5.62 | 4.45 |
+| 16 | 11.00 | 8.64 |
+| 24 | **11.90** (AP_s 3.38) | **9.01** (AP_s 2.46) |
+
+**Qaror: halo-zero sof ko'rinishda RAD ETILDI.** AP farqi −2.89, mezon esa ≤ −1.0 edi. Farq o'qitish
+oxirigacha ham yopilmadi: 8-epoxada −1.2, 24-epoxada −2.9. Demak blok chegaralarida yo'qotiladigan
+kontekst haqiqiy zarar keltiradi va bu shunchaki sekin konvergensiya emas.
+
+Shunga ko'ra:
+- Sarbon oddiy stem bilan o'qitiladi (`--no-halo-zero`).
+- Temporal sparsity M1 halo engine'i orqali beriladi (aniq), cell-level gating esa yana 25–29% tejaydi.
+
+Halo-zero'ni qutqarish g'oyalari (keyinroq sinash mumkin):
+- (a) blokka faqat 4–8 px ustma-ust tushish (overlap) qo'shish;
+- (b) blok chegaralarini kadrlar orasida siljitish (shifted blocks, Swin uslubi);
+- (c) halo-zero'ni faqat stride 2/4 da qo'llab, stride 8'ni oddiy qoldirish.
+
 ### Ma'lumotlar (litsenziya, tijoriy foydalanish)
 
 - **Pretraining:**
