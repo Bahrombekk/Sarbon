@@ -45,12 +45,15 @@ class CocoDetection(Dataset):
         for a in ann["annotations"]:
             if a["category_id"] in self.label_of and not a.get("iscrowd", 0):
                 boxes.setdefault(a["image_id"], []).append(a)
-        self.images = [im for im in ann["images"] if im["id"] in boxes
-                       and (not commercial_only or im["license"] in ok_lic)]
+        self.images = [{k: im[k] for k in ("id", "file_name", "width", "height")} for im in ann["images"]
+                       if im["id"] in boxes and (not commercial_only or im["license"] in ok_lic)]
         if limit:
             self.images = self.images[:limit]
-        self.boxes = boxes
-        self.coco_json = ann  # for evaluation
+        # keep only what __getitem__ needs: on Windows the dataset is pickled into every
+        # DataLoader worker, and the full COCO json there exhausted the commit limit
+        keep = {im["id"] for im in self.images}
+        self.boxes = {i: [{"bbox": a["bbox"], "category_id": a["category_id"]} for a in v]
+                      for i, v in boxes.items() if i in keep}
 
     def __len__(self):
         return len(self.images)

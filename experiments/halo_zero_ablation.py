@@ -103,7 +103,9 @@ def main():
                           collate_fn=TargetCollate(build_targets, num_classes, out_h, out_w),
                           drop_last=True, pin_memory=device.type == "cuda",
                           persistent_workers=args.workers > 0)
-    val_dl = DataLoader(val_ds, args.batch, num_workers=args.workers, collate_fn=collate)
+    # few, persistent eval workers: respawning 16 per eval exhausted the Windows commit limit
+    val_dl = DataLoader(val_ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
+                        persistent_workers=args.workers > 0)
 
     model = ProxyDetector(num_classes, halo_zero=args.variant == "halo").to(device)
     if device.type == "cuda":
