@@ -6,6 +6,7 @@ then:
   .venv\\Scripts\\python.exe experiments\\train_track.py --mot D:\\data\\pseudo_mot --classes 1 ...
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -22,14 +23,17 @@ def main():
     ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--width", type=int, default=1280, help="resize frames to this width")
     ap.add_argument("--stride", type=int, default=3)
+    ap.add_argument("--first-index", type=int, default=0, help="number sequences from here (append runs)")
     args = ap.parse_args()
     srcs = []
     for s in args.sources:
         p = Path(s)
         srcs += sorted(f for f in p.iterdir() if f.suffix.lower() in VIDEO_EXT) if p.is_dir() else [s]
     cfg = PseudoConfig(stride=args.stride)
-    for k, src in enumerate(srcs):
-        name = f"cam{k:03d}_{Path(str(src)).stem}"[:60]
+    for k, src in enumerate(srcs, args.first_index):
+        # ASCII-only folder names: OpenCV and many tools break on non-ASCII Windows paths
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(str(src)).stem).strip("_") or "video"
+        name = f"cam{k:03d}_{stem}"[:60]
         # two passes over the source: labelling needs the whole sequence before writing
         labels = pseudo_label(video_frames(src, args.max_frames, args.width), cfg)
         n_img, n_box = write_mot(video_frames(src, args.max_frames, args.width), labels,

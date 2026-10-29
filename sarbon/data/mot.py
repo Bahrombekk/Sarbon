@@ -41,7 +41,7 @@ class MOTClips(Dataset):
         return self.samples
 
     def _frame(self, s, f):
-        img = cv2.imread(str(s["imgs"][f]))[:, :, ::-1]
+        img = cv2.imdecode(np.fromfile(str(s["imgs"][f]), np.uint8), cv2.IMREAD_COLOR)[:, :, ::-1]
         img, sc, (px, py) = letterbox(img, self.size)
         rows = s["gt"].get(f, np.zeros((0, 9)))
         b = rows[:, 2:6].astype(np.float32).copy()

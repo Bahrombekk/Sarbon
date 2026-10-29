@@ -154,7 +154,8 @@ def write_mot(frames, labels, out_dir, cfg: PseudoConfig = None):
         if cfg.paint and un is not None and len(un) and bgb is not None:
             bgi = cv2.imdecode(np.frombuffer(bgb, np.uint8), cv2.IMREAD_COLOR)
             frame = paint(frame, un, bgi, [b for _, b in objs], cfg.paint_margin)
-        cv2.imwrite(str(out / "img1" / f"{n:06d}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        # imencode + tofile: cv2.imwrite silently fails on non-ASCII Windows paths
+        cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])[1].tofile(str(out / "img1" / f"{n:06d}.jpg"))
         for tid, (x0, y0, x1, y1) in objs:
             rows.append(f"{n},{tid},{x0:.1f},{y0:.1f},{x1 - x0:.1f},{y1 - y0:.1f},1,1,1")
     (out / "gt" / "gt.txt").write_text("\n".join(rows) + "\n")
