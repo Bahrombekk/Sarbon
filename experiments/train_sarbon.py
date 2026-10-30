@@ -116,14 +116,6 @@ def postprocess(out, size, k=300):
 
 def evaluate(model, ds, loader, device, num_classes, size, cats=None):
     """COCO AP; cats: evaluate only these classes (the ones a dataset annotates)."""
-    gt = {"images": [], "annotations": [], "categories": [{"id": c} for c in range(num_classes)]}
-    for img_id, boxes, labels in ds.gt_letterboxed():
-        gt["images"].append({"id": img_id})
-        for b, l in zip(boxes, labels):
-            w, h = b[2] - b[0], b[3] - b[1]
-            gt["annotations"].append({"id": len(gt["annotations"]) + 1, "image_id": img_id,
-                                      "category_id": l, "bbox": [b[0], b[1], w, h], "area": w * h,
-                                      "iscrowd": 0})
     dets = []
     model.eval()
     for imgs, _, _, meta in loader:
@@ -133,6 +125,19 @@ def evaluate(model, ds, loader, device, num_classes, size, cats=None):
             for bb, s, l in zip(boxes.float().tolist(), scores.float().tolist(), labels.tolist()):
                 dets.append({"image_id": m[0], "category_id": l,
                              "bbox": [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]], "score": s})
+    return coco_metrics(ds.gt_letterboxed(), dets, num_classes, cats)
+
+
+def coco_metrics(gt_items, dets, num_classes, cats=None):
+    """gt_items: (image_id, xyxy boxes, labels); dets: COCO result dicts (xywh), same pixel frame."""
+    gt = {"images": [], "annotations": [], "categories": [{"id": c} for c in range(num_classes)]}
+    for img_id, boxes, labels in gt_items:
+        gt["images"].append({"id": img_id})
+        for b, l in zip(boxes, labels):
+            w, h = b[2] - b[0], b[3] - b[1]
+            gt["annotations"].append({"id": len(gt["annotations"]) + 1, "image_id": img_id,
+                                      "category_id": l, "bbox": [b[0], b[1], w, h], "area": w * h,
+                                      "iscrowd": 0})
     if not dets:
         return {"AP": 0.0}
     with contextlib.redirect_stdout(io.StringIO()):
