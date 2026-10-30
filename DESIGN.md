@@ -571,6 +571,32 @@ Butun zanjir sinaldi: video fayl → psevdo-dataset → o'z-o'zini o'qitish → 
 Hali yo'q, keyingi navbatda: DINOv2 distillyatsiya pretraining, foveal yo'l, klip bo'yicha video
 o'qitish va staleness simulyatsiyasi.
 
+### Sarbon-S natijalari va fusion ablation (2026-10-29/30, o'lchangan)
+
+COCO val2017, 6 kuzatuv klassi, 640 px; train: faqat tijoriy litsenziyali ~18k rasm, 72 epoxa.
+
+| Model | Eng yaxshi AP (epoxa) | AP50 | AP_small | AP_large | 72-epoxa AP |
+|---|---|---|---|---|---|
+| Sarbon-S scratch | 36.4 (60) | 55.5 | 16.1 | 50.9 | 36.2 |
+| Sarbon-S + DINOv2 distill init | **39.0 (52)** | **59.6** | 16.3 | **56.3** | 38.0 |
+
+- Distillyatsiya **+2.6 AP** beradi va bir xil AP'ga ~2.5x kam epoxada yetadi.
+- Distill run 52-epoxadan keyin pasaydi (39.0 → 38.0): 18k rasmda overfitting. Ma'lumot
+  ko'paymaguncha ~50 epoxa yetarli. Asosiy cheklov endi arxitektura emas, ma'lumot.
+- AP_small deyarli o'zgarmadi (16.1 → 16.3): DINOv2 stride-16 xususiyatlari kichik obyektga yordam bermaydi.
+
+Neck fusion ablation (scratch, 24 epoxa, bitta seed):
+
+| Fusion | AP | AP50 | AP_small | AP_large |
+|---|---|---|---|---|
+| concat | **30.2** | **47.6** | 11.0 | **43.3** |
+| weighted (BiFPN) | 29.6 | 46.1 | **12.9** | 42.3 |
+| gated | 29.8 | 46.7 | 11.2 | 42.6 |
+
+- Umumiy AP farqi (≤0.6) bitta seed shovqini ichida: concat default qoladi.
+- weighted AP_small'da +1.9 beradi, bu kuzatuv kameralari uchun muhim. Ko'p ma'lumotli
+  o'qitishda (multi-dataset) qayta tekshiriladi.
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
