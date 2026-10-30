@@ -191,6 +191,7 @@ def main():
     ap.add_argument("--yolo", help="folder with train.txt / val.txt (make_yolo_split.py) of own labelled data")
     ap.add_argument("--yolo-map", default="0:3,1:4", help="YOLO class -> our label (railsafe: yengil, ogir)")
     ap.add_argument("--eval-every", type=int, default=4)
+    ap.add_argument("--resume", action="store_true", help="continue from <out>/ckpt.pt if present")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default="runs/sarbon")
     args = ap.parse_args()
@@ -261,9 +262,19 @@ def main():
     ema = ModelEMA(model)
     out_dir = Path(args.out) / f"{args.size}{'_bench' if args.benchmark else ''}{args.tag}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    log, best, t0 = [], -1.0, time.time()
-    for ep in range(args.epochs):
-        if ep == args.epochs - args.no_aug_epochs:
+    log, best, t0, start = [], -1.0, time.time(), 0
+    ckpt = out_dir / "ckpt.pt"
+    if args.resume and ckpt.exists():
+        c = torch.load(ckpt, map_location="cpu", weights_only=False)
+        model.load_state_dict(c["model"])
+        ema.ema.load_state_dict(c["ema"])
+        ema.updates = c["ema_updates"]
+        opt.load_state_dict(c["opt"])
+        sched.load_state_dict(c["sched"])
+        start, log, best = c["epoch"], c["log"], c["best"]
+        print(f"resumed from {ckpt} at epoch {start}", flush=True)
+    for ep in range(start, args.epochs):
+        if ep >= args.epochs - args.no_aug_epochs and mosaics[0].prob > 0:
             for m in mosaics:
                 m.prob = 0.0
             del train_dl  # shut the old workers down before starting ones that see prob = 0
@@ -300,6 +311,11 @@ def main():
             if score > best:
                 best = score
                 torch.save(ema.ema.state_dict(), out_dir / "best.pt")
+        # full training state every epoch: a killed run loses at most one epoch (--resume)
+        torch.save({"model": model.state_dict(), "ema": ema.ema.state_dict(), "ema_updates": ema.updates,
+                    "opt": opt.state_dict(), "sched": sched.state_dict(), "epoch": ep + 1, "log": log,
+                    "best": best}, out_dir / "ckpt.tmp")
+        (out_dir / "ckpt.tmp").replace(ckpt)
 
 
 if __name__ == "__main__":

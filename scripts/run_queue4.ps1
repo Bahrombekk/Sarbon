@@ -1,7 +1,7 @@
 # After queue3 (RailSafe fine-tune): YOLO11s baseline on the same split, then the comparison.
 # Ultralytics runs in the Collector env (AGPL, measurement only); Sarbon in its own env.
-# Start detached:
-#   Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','D:\Sarbon\scripts\run_queue4.ps1'
+# Start outside the calling app's process tree (see run_bench.ps1):
+#   Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{CommandLine='powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File D:\Sarbon\scripts\run_queue4.ps1'}
 param([string]$Split = "C:\data\pereezd_split", [string]$Runs = "D:\Sarbon\runs",
       [string]$YoloPy = "C:\Users\User\Desktop\Collector\venv310\Scripts\python.exe")
 $py = "D:\Sarbon\.venv\Scripts\python.exe"
