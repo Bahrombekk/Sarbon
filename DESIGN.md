@@ -597,6 +597,14 @@ Neck fusion ablation (scratch, 24 epoxa, bitta seed):
 - weighted AP_small'da +1.9 beradi, bu kuzatuv kameralari uchun muhim. Ko'p ma'lumotli
   o'qitishda (multi-dataset) qayta tekshiriladi.
 
+### To'liq COCO benchmark (faqat ilmiy o'lchov, 2026-10-30 dan)
+
+YOLO bilan teng sharoitda solishtirish uchun Sarbon-S to'liq COCO train2017'da (117k rasm, 80 klass)
+o'qitiladi: DINOv2 distill init, 72 epoxa, `runs/sarbon/s_bench_distill`. To'liq COCO'da NC litsenziyali
+rasmlar bor, shuning uchun **bu og'irliklar mahsulotga kirmaydi**, ular faqat arxitekturani o'lchaydi.
+Natija jadvalda init va epoxa bilan birga beriladi (YOLO11s: scratch, 600 ep; D-FINE-S: ImageNet, 120+ ep).
+Yakuniy raqam rasmiy pycocotools eval'da (asl koordinatalar, crowd = ignore) qayta o'lchanadi.
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
