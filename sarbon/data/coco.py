@@ -17,6 +17,9 @@ COMMERCIAL_OK = {"Attribution License", "Attribution-ShareAlike License",
                  "No known copyright restrictions", "United States Government Work"}
 SURVEILLANCE = ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
 ALL = None  # every COCO category (research benchmark against published numbers)
+# RailSafe crossing classes; COCO names mapped onto them (bus and truck are both "og'ir")
+RAILSAFE = ["person", "bicycle", "motorcycle", "yengil", "ogir", "train"]
+RAILSAFE_FROM_COCO = {"person": 0, "bicycle": 1, "motorcycle": 2, "car": 3, "bus": 4, "truck": 4, "train": 5}
 
 
 def letterbox(img, size):
@@ -32,14 +35,20 @@ def letterbox(img, size):
 
 class CocoDetection(Dataset):
     def __init__(self, root, split, size=640, classes=SURVEILLANCE, commercial_only=True,
-                 train=True, limit=None):
+                 train=True, limit=None, class_map=None):
+        """class_map: optional {coco name: our label}; several names may share a label."""
         root = Path(root)
         ann = json.loads((root / "annotations" / f"instances_{split}.json").read_text())
         self.img_dir = root / split
         self.size, self.train = size, train
         names = {c["id"]: c["name"] for c in ann["categories"]}
-        self.cat_ids = [cid for cid, n in names.items() if classes is None or n in classes]
-        self.label_of = {cid: i for i, cid in enumerate(self.cat_ids)}
+        if class_map:
+            self.cat_ids = [cid for cid, n in names.items() if n in class_map]
+            self.label_of = {cid: class_map[names[cid]] for cid in self.cat_ids}
+        else:
+            self.cat_ids = [cid for cid, n in names.items() if classes is None or n in classes]
+            self.label_of = {cid: i for i, cid in enumerate(self.cat_ids)}
+        self.num_classes = len(set(self.label_of.values()))
         ok_lic = {l["id"] for l in ann["licenses"] if l["name"] in COMMERCIAL_OK}
         boxes = {}
         for a in ann["annotations"]:

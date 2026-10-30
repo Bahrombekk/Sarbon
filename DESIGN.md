@@ -605,6 +605,24 @@ rasmlar bor, shuning uchun **bu og'irliklar mahsulotga kirmaydi**, ular faqat ar
 Natija jadvalda init va epoxa bilan birga beriladi (YOLO11s: scratch, 600 ep; D-FINE-S: ImageNet, 120+ ep).
 Yakuniy raqam rasmiy pycocotools eval'da (asl koordinatalar, crowd = ignore) qayta o'lchanadi.
 
+### RailSafe o'z ma'lumoti: qisman yorliqlar bilan o'qitish (2026-10-30)
+
+Foydalanuvchining `pereezd_dataset` (YOLO format, 8 413 kadr 2560x1440, 47 video, 2 klass:
+yengil 42.5k / og'ir 2.8k box) ko'rib chiqildi:
+- Asl val qismidagi 41 ketma-ketlikning hammasi train'da ham bor edi (kadrlar 0.2 s farq): val
+  sun'iy baland chiqardi. `scripts/make_yolo_split.py` videolar bo'yicha qayta bo'ladi:
+  train 6 722 (38 video), val 1 691 (9 video, og'ir box'larning 36%i). Asl ma'lumotga tegilmaydi,
+  NVMe nusxa: `C:\data\pereezd_dataset`, ro'yxatlar: `C:\data\pereezd_split`.
+- Unda faqat transport belgilangan: piyoda va poyezd bor, lekin ramkasiz. Oddiy o'qitish ularni
+  "fon" deb o'rgatardi. Yechim, **qisman yorliq (partial label)**: har bir rasm qaysi klasslarni
+  belgilaganini bildiruvchi `valid` maska (`WithClassMask`), MAL/focal loss belgilanmagan klassga
+  na musbat, na manfiy signal beradi (Federated loss / UniDet g'oyasi). Mosaic bitta manba ichida.
+- RailSafe taksonomiyasi: person, bicycle, motorcycle, **yengil** (COCO car), **og'ir** (COCO bus +
+  truck), **train**. Fine-tune tijoriy `s_distill/best.pt` dan; klass head qatorlari nom bo'yicha
+  ko'chiriladi (car → yengil, truck → og'ir), train yangidan.
+- Baholash ikki xil: COCO val (6 klass) va o'z val'imiz (faqat yengil/og'ir); eng yaxshi checkpoint
+  o'z val'imiz bo'yicha tanlanadi. Navbat: `scripts/run_queue3.ps1` (benchmark tugagach, 24 epoxa).
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.

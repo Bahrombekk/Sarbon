@@ -70,18 +70,26 @@ class HungarianMatcher(nn.Module):
         return out
 
 
-def sigmoid_focal(logits, target, alpha=0.25, gamma=2.0):
+def sigmoid_focal(logits, target, alpha=0.25, gamma=2.0, valid=None):
+    """valid: optional [B, 1, C] bool -- classes annotated in each image (others get no loss)."""
     p = logits.sigmoid()
     ce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     pt = p * target + (1 - p) * (1 - target)
-    return (ce * (1 - pt) ** gamma * (alpha * target + (1 - alpha) * (1 - target))).sum()
+    loss = ce * (1 - pt) ** gamma * (alpha * target + (1 - alpha) * (1 - target))
+    return (loss if valid is None else loss * valid).sum()
 
 
-def mal_loss(logits, target_q, pos_mask, gamma=1.5):
-    """Matchability-Aware Loss: pos -> BCE towards q^gamma; neg -> p^gamma-weighted BCE to 0."""
+def mal_loss(logits, target_q, pos_mask, gamma=1.5, valid=None):
+    """Matchability-Aware Loss: pos -> BCE towards q^gamma; neg -> p^gamma-weighted BCE to 0.
+
+    valid: optional [B, 1, C] bool -- classes annotated in each image. An unannotated class
+    is unknown, not absent, so it is neither pushed up nor down (partial-label training).
+    """
     p = logits.sigmoid().detach()
     t = torch.where(pos_mask, target_q.pow(gamma), torch.zeros_like(target_q))
     w = torch.where(pos_mask, torch.ones_like(p), p.pow(gamma))
+    if valid is not None:
+        w = w * valid
     return (F.binary_cross_entropy_with_logits(logits, t, reduction="none") * w).sum()
 
 
@@ -124,7 +132,7 @@ class SetCriterion(nn.Module):
         gi = torch.cat([g + offsets[i] for i, (_, g) in enumerate(matches)])
         return bi.to(device), qi.to(device), gi.to(device)
 
-    def _single(self, o, flat, all_lab, all_box, n_norm, ref_init=None):
+    def _single(self, o, flat, all_lab, all_box, n_norm, ref_init=None, valid=None):
         logits, boxes = o["pred_logits"], o["pred_boxes"]
         bi, qi, gi = flat
         has = len(bi) > 0
@@ -138,9 +146,9 @@ class SetCriterion(nn.Module):
             pos[bi, qi, lab] = True
             q[bi, qi, lab] = iou
         if self.cls_loss == "mal":
-            loss = {"cls": mal_loss(logits.float(), q, pos) / n_norm}
+            loss = {"cls": mal_loss(logits.float(), q, pos, valid=valid) / n_norm}
         else:
-            loss = {"cls": sigmoid_focal(logits.float(), pos.float()) / n_norm}
+            loss = {"cls": sigmoid_focal(logits.float(), pos.float(), valid=valid) / n_norm}
         if not has:
             zero = boxes.sum() * 0
             loss.update(l1=zero, giou=zero)
@@ -167,7 +175,10 @@ class SetCriterion(nn.Module):
         return total
 
     def forward(self, out, targets, fixed=None):
-        """out: SarbonDetector output; fixed: track-query assignments (see matcher)."""
+        """out: SarbonDetector output; fixed: track-query assignments (see matcher).
+
+        A target may carry "valid" ([C] bool): the classes annotated in that image.
+        """
         dev = out["pred_logits"].device
         skip = out.get("n_track", 0)
         sizes = [len(t["labels"]) for t in targets]
@@ -176,13 +187,17 @@ class SetCriterion(nn.Module):
             offsets.append(offsets[-1] + n)
         all_lab = torch.cat([t["labels"] for t in targets]).to(dev)
         all_box = torch.cat([t["boxes"] for t in targets]).to(dev)
+        valid = None
+        if any("valid" in t for t in targets):
+            ones = torch.ones(self.num_classes, dtype=torch.bool)
+            valid = torch.stack([t.get("valid", ones).to(dev) for t in targets])[:, None]
         n_norm = max(1.0, float(sum(sizes)))
         total, logs = 0.0, {}
 
         def run(o, matches, norm, ref_init=None, log=False):
             nonlocal total
             flat = self._flat(matches, offsets, dev)
-            parts, iou = self._single(o, flat, all_lab, all_box, norm, ref_init)
+            parts, iou = self._single(o, flat, all_lab, all_box, norm, ref_init, valid)
             for k, v in parts.items():
                 total = total + self.w[k] * v
                 if log:
