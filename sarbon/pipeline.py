@@ -52,15 +52,18 @@ class SarbonVideo:
             from .sparse.fused_engine import FusedSparseEngine
             local = stem_to_local(self.det.stem).to(self.dev)
             self.engine = FusedSparseEngine(local, n_cams, self.h, self.w, dtype=torch.float16, tau=tau)
+        self._mean = torch.from_numpy(MEAN).to(self.dev)
+        self._std = torch.from_numpy(STD).to(self.dev)
         self.started = False
         self.stats = {"frames": 0, "active_blocks": []}
 
     # ---------------- helpers ----------------
     def _prep(self, frames):
-        """BGR uint8 frames -> normalised NHWC float tensor at engine size."""
+        """BGR uint8 frames -> normalised NHWC float tensor at engine size (normalised on the device)."""
         x = np.stack([cv2.resize(f, (self.w, self.h), interpolation=cv2.INTER_LINEAR)[:, :, ::-1]
-                      for f in frames]).astype(np.float32)
-        return torch.from_numpy((x - MEAN) / STD).to(self.dev)
+                      for f in frames])
+        x = torch.from_numpy(x).to(self.dev).float()
+        return (x - self._mean) / self._std
 
     @torch.no_grad()
     def _stem(self, x):

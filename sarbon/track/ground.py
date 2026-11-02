@@ -112,8 +112,5 @@ class GroundKalman:
         """Squared Mahalanobis distances of measurements zs [N, 2] with covariances rs [N, 2, 2]."""
         m = self.Hm @ mean
         p = self.Hm @ cov @ self.Hm.T
-        out = np.empty(len(zs))
-        for i, (z, r) in enumerate(zip(zs, rs)):
-            d = z - m
-            out[i] = d @ np.linalg.solve(p + r, d)
-        return out
+        d = zs - m
+        return np.einsum("ni,ni->n", d, np.linalg.solve(p + rs, d[..., None])[..., 0])
