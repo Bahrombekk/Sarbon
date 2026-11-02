@@ -36,7 +36,11 @@ def boxes_to_block_mask(boxes, hb, wb, block, margin=0):
 class SarbonVideo:
     def __init__(self, detector, n_cams, size=(640, 1152), tracker_cfg: TrackerConfig = None,
                  tau=0.0, keep_score=0.1, max_dets=100, use_color=True, track_steer=True,
-                 class_names=None, device="cuda"):
+                 class_names=None, device="cuda", refresh=0, calibrate=True):
+        """tau: per-pixel change (in 0..1 image units, averaged over the block) below which a
+        block counts as unchanged. refresh: recompute every block at least every `refresh`
+        steps (bounded staleness). calibrate: time sparse vs dense on the first frame and fall
+        back to the dense stem above the measured crossover (scene cuts, camera shake)."""
         self.dev = torch.device(device)
         self.det = detector.eval().to(self.dev)
         self.n, (self.h, self.w) = n_cams, size
@@ -51,7 +55,10 @@ class SarbonVideo:
         if self.dev.type == "cuda":
             from .sparse.fused_engine import FusedSparseEngine
             local = stem_to_local(self.det.stem).to(self.dev)
-            self.engine = FusedSparseEngine(local, n_cams, self.h, self.w, dtype=torch.float16, tau=tau)
+            # the engine compares normalised frames: convert tau from image units
+            self.engine = FusedSparseEngine(local, n_cams, self.h, self.w, dtype=torch.float16,
+                                            tau=tau * 255 / float(STD.mean()), refresh=refresh)
+        self.calibrate, self.calibration = calibrate, None
         self._mean = torch.from_numpy(MEAN).to(self.dev)
         self._std = torch.from_numpy(STD).to(self.dev)
         self.started = False
@@ -72,6 +79,8 @@ class SarbonVideo:
         x = x.half()
         if not self.started:
             self.engine.reset(x)
+            if self.calibrate:
+                self.calibration = self.engine.calibrate()
             k = self.engine.n_blocks
         else:
             _, k = self.engine.step(x)

@@ -183,6 +183,9 @@ def main():
     ap.add_argument("--fusion", default="concat", choices=["concat", "weighted", "gated"])
     ap.add_argument("--block", default="res", choices=["res", "rep", "dw"])
     ap.add_argument("--act", default="relu", choices=["relu", "silu", "gelu"])
+    ap.add_argument("--widths", help="stem widths at stride 2/4/8, e.g. 48,96,192 (backbone ablation)")
+    ap.add_argument("--depths", help="Res blocks at stride 4/8, e.g. 2,3")
+    ap.add_argument("--c16", type=int, help="channels of the stride-16 stage")
     ap.add_argument("--tag", default="", help="suffix for the output folder (ablations)")
     ap.add_argument("--init", help="pretrained weights: distillation output or a detector checkpoint")
     ap.add_argument("--init-classes", choices=["surveillance"],
@@ -244,8 +247,15 @@ def main():
     yolo_dl = yolo_val and DataLoader(yolo_val, args.batch, num_workers=min(4, args.workers),
                                       collate_fn=collate, persistent_workers=args.workers > 0)
 
+    arch = {}
+    if args.widths:
+        arch["widths"] = tuple(int(v) for v in args.widths.split(","))
+    if args.depths:
+        arch["depths"] = tuple(int(v) for v in args.depths.split(","))
+    if args.c16:
+        arch["c16"] = args.c16
     model = build(args.size, num_classes, halo_zero=not args.no_halo_zero, fusion=args.fusion,
-                  block_type=args.block, act=args.act).to(device)
+                  block_type=args.block, act=args.act, **arch).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
     if args.init:
         src = SURVEILLANCE if args.init_classes == "surveillance" else None

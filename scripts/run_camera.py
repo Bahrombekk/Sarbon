@@ -243,7 +243,8 @@ def main():
     if ms_hist:
         print(f"done: {n} frames, last 30 avg {np.mean(ms_hist):.1f} ms per step ({len(srcs)} cameras)")
         if video.stats["active_blocks"]:
-            print(f"block-sparse: {100 * np.mean(video.stats['active_blocks']):.0f}% of blocks recomputed on average")
+            print(f"block-sparse: {100 * np.mean(video.stats['active_blocks']):.0f}% of blocks recomputed on average, "
+                  f"steps {video.engine.stats}, dense above {video.engine.fallback}/{video.engine.n_blocks} blocks")
 
 
 if __name__ == "__main__":

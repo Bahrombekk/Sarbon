@@ -642,6 +642,46 @@ yengil 42.5k / og'ir 2.8k box) ko'rib chiqildi:
   11–78 ms orasida sakraydi (CPU kernel-launch va GPU P-state'ga bog'liq). Adolatli o'lchov: ikkala model
   ONNX → TensorRT fp16, bir xil sharoitda.
 
+### Kichik obyektdagi −12.7 qayerdan keladi? (2026-11-02, o'lchangan)
+
+`bench/small_recall.py`: kichik GT box'larning klassga bog'liq bo'lmagan recall'i, o'z val, 640 px.
+Qatorlar: `enc` = 300 ta encoder taklifi, `final` = barcha 300 dekoder box'i, `@0.3` = ball ≥ 0.3.
+
+| IoU | Bosqich | 0–16 px | 16–32 px | 32–96 px | >96 px |
+|---|---|---|---|---|---|
+| 0.5 | Sarbon @0.3 | **88.2%** | **95.4%** | **98.3%** | **94.3%** |
+| 0.5 | YOLO11s @0.3 | 71.9% | 92.6% | 96.5% | 86.3% |
+| 0.75 | Sarbon @0.3 | **69.4%** | **85.1%** | **96.6%** | **92.7%** |
+| 0.75 | YOLO11s @0.3 | 60.7% | 83.8% | 94.8% | 84.6% |
+| 0.9 | Sarbon final / YOLO any | 18.6 / 16.6% | 57.2 / 54.4% | 89.9 / 88.2% | 90.8 / 80.8% |
+
+- **Sarbon kichik obyektlarni YOLO'dan ko'proq va aniqroq topadi** (har IoU'da). Encoder tanlovi ham
+  ularni yo'qotmaydi (IoU 0.5 da 99%). Demak −12.7 AP_small recall yoki lokalizatsiya muammosi emas.
+- Ball ≥ 0.3 bo'lgan kichik detection'lar: Sarbon 74.0% GT bilan mos, **24.3% mos emas**; YOLO 82.9 / 15.5%.
+- Mos kelmagan 48 ta Sarbon box'i qo'lda ko'rildi (`runs/small_fp_sheet.jpg`): taxminan **3/4 qismi
+  haqiqiy, lekin belgilanmagan mashinalar** (devor ortida turgan, uzoqdagi, avtobus old qismi). Qolgani
+  haqiqiy xato: vagondagi po'lat rulonlar "yengil", semafor ustunlari.
+- Xulosa: o'z val'dagi AP_small asosan **yorliqlash siyosatini** o'lchaydi. YOLO faqat shu data'da
+  o'qigani uchun "uzoq/turgan mashinani belgilama" qoidasini o'rgangan, Sarbon COCO'dan o'rgangani uchun
+  ularni topadi va FP deb jazolanadi. Kerakli ish: (1) to'liq qayta belgilangan kichik test to'plami
+  (barcha transport, piyoda, poyezd); (2) rulon/vagon uchun hard-negative yoki `train` yorliqlari.
+- Arxitektura bo'yicha haqiqiy o'lchov COCO'da qoladi (to'liq yorliqli): Sarbon 42.6 va YOLO11s 47.0.
+  Navbat `scripts/run_queue5.ps1` (24 ep, scratch, baseline 30.2 / APs 11.0): NWD matching va 2x backbone
+  (18.5M, backbone 5.3M → 10.6M).
+
+Yuqori kirish o'lchami o'qitishsiz yordam bermaydi: 640 da 74.1 AP, 960 da 61.7, 1152 da 38.5
+(model 640 da o'qigan). Yuqori aniqlik faqat shu o'lchamda o'qitish bilan sinaladi.
+
+**Sparse stem real videoda.** Pereezd yozuvlarida haqiqatan o'zgargan bloklar (tau 0.02–0.03, 1152x640):
+busy kamerada 16–24%, tinchida 7–8%. Lekin oddiy (halo'siz) stem'ning receptive field'i 55 px, shuning
+uchun engine o'zgarishni 2 blok radiusga yoyadi va ish 85–95% ga chiqadi, sparse foyda deyarli yo'q.
+Bundan tashqari:
+- `tau` normallashtirilgan birlikda solishtirilardi (amalda ~4x past). Endi `SarbonVideo` tau'ni rasm
+  birligida (0..1) qabul qiladi.
+- `calibrate()` chaqirilmagani uchun dense'ga qaytish ishlamasdi. Endi birinchi kadrda chaqiriladi.
+- Stem umumiy vaqtning kichik qismi. Tezlik uchun asosiy ish dense core + dekoder (TensorRT) va
+  treker (yo'qolgan treklar 300 kadr saqlanadi, vaqt 15 → 60 ms o'sadi).
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
