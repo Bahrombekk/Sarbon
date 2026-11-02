@@ -93,7 +93,7 @@ def process(path, gd, args, h, w):
         if len(thumbs) % (args.batch * 250) == 0:
             print(f"\r{path.name}: {len(thumbs)}/{n} frames, {len(thumbs) / (time.time() - t0):.0f} fps", end="")
     print(f"\r{path.name}: {len(thumbs)} frames in {time.time() - t0:.0f}s" + " " * 20)
-    out = Path(args.out) / f"{path.stem}.npz"
+    out = Path(args.out) / f"{path.stem}{args.suffix}.npz"
     np.savez_compressed(out, dets=np.concatenate(rows).astype(np.float32), off=np.array(off, np.int64),
                         thumb=np.stack(thumbs), fps=fps, size=np.array([W, H]))
     return {"video": str(path), "frames": len(thumbs), "fps": fps, "size": [W, H], "dets": off[-1]}
@@ -109,6 +109,7 @@ def main():
     ap.add_argument("--max-dets", type=int, default=100)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="frames per video (0 = all)")
+    ap.add_argument("--suffix", default="", help="appended to output names, e.g. _448 for a second input size")
     args = ap.parse_args()
     h, w = (int(v) for v in args.size.lower().split("x"))
     Path(args.out).mkdir(parents=True, exist_ok=True)
@@ -116,7 +117,7 @@ def main():
     gd = GraphedDetector(det, args.batch, h, w)
     videos = [Path(p) for v in args.videos for p in sorted(glob.glob(v))]
     report = [process(v, gd, args, h, w) for v in videos]
-    (Path(args.out) / "reference.json").write_text(json.dumps({"weights": args.weights, "size": [h, w],
+    (Path(args.out) / f"reference{args.suffix}.json").write_text(json.dumps({"weights": args.weights, "size": [h, w],
                                                                 "videos": report}, indent=1), encoding="utf-8")
 
 

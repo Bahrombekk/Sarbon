@@ -44,16 +44,37 @@ def run(ref, policy, frames=None):
     return cam.out, mask
 
 
+class _Plan:
+    """Fixed per-frame plan: plan[t] = -1 skip (coast), 0 full detector, k > 0 sources[k - 1]."""
+
+    def __init__(self):
+        self.name = "plan"
+
+    def computed(self, t, thumb):
+        pass
+
+
+def run_plan(ref, sources, plan):
+    """Replay a fixed full / cheap / skip plan; returns (output, mask of frames with any run)."""
+    cam = _Cam(ref, _Plan())
+    for t, m in enumerate(plan):
+        cam.step(t, m >= 0, None if m <= 0 else sources[m - 1])
+    return cam.out, np.asarray(plan) >= 0
+
+
 class _Cam:
     def __init__(self, ref, policy):
         self.ref, self.policy = ref, policy
         self.tr = SarbonTracker(TrackerConfig(**TRACKER), ref["size"])
         self.cls_of, self.out = {}, []
 
-    def step(self, t, compute):
+    def step(self, t, compute, source=None):
+        """compute: run the detector on frame t; `source` = another dense reference of the same
+        video (e.g. a lower input size) whose detections stand in for a cheaper detector run."""
         ref, tr = self.ref, self.tr
         if compute:
-            d = ref["dets"][ref["off"][t]:ref["off"][t + 1]]
+            src = source or ref
+            d = src["dets"][src["off"][t]:src["off"][t + 1]]
             res = tr.update(d[:, :4], d[:, 4])
             if len(res) and len(d):
                 near = iou(np.array([b for _, b, _, _ in res]), d[:, :4]).argmax(1)

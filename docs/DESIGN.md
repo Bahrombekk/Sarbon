@@ -732,6 +732,24 @@ Xulosalar:
   yuborish o'rniga arzon qisman hisoblash (past o'lcham yoki faqat o'zgargan hudud) va siyrak
   kadrlarga moslashgan treker; scheduler tinch kameralar ko'p bo'lgan tarmoqlarda qayta sinaladi.
 
+**Arzon qisman hisoblash (past o'lcham) — bu ham salbiy** (`bench/partial_eval.py`, o'sha 5 x 12000 kadr).
+Narx 8 kamera batch'ida o'lchangan: 448x800 = 0.58, 320x576 = 0.41 (1 kamerada 0.79 / 0.67, decoder
+doimiy xarajati tufayli).
+
+| Reja | Narx | Recall | Aniqlik | Odam recall |
+|---|---|---|---|---|
+| har 2-kadr to'liq, qolgani skip | 0.50 | **0.917** | 0.939 | **0.895** |
+| faqat 448 | 0.58 | 0.732 | 0.684 | 0.591 |
+| har 2-kadr to'liq + 448 | 0.79 | 0.742 | 0.900 | 0.605 |
+| faqat 320 | 0.41 | 0.573 | 0.701 | 0.400 |
+
+Past o'lchamdagi detektsiyalar treker holatini buzadi: aralashtirilganda ham recall skip'dan 17 punkt
+past. Model 640 da o'qigan, kichik kirishda kichik obyektlar yo'qoladi va boxlar siljiydi; Kalman
+bashorati (coast) bir necha kadr uchun ancha aniqroq. Xulosa: hozirgi model va bu kameralarda
+hisoblashni boshqarish (qachon ham, qanday arzon ham) yutuq bermaydi; TensorRT bilan detektor
+4 kamerada 0.5 ms/kadr, ya'ni tejaladigan GPU vaqti ham kichik. Simulyator va reference'lar
+saqlanadi: tinch kameralar ko'p tarmoq yoki Jetson kabi kuchsiz qurilmada qayta sinash uchun.
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.
