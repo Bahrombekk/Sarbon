@@ -41,7 +41,9 @@ class Deploy(torch.nn.Module):
 
 
 def export(model, path, batch, img, opset):
-    x = torch.rand(batch, 3, img, img) * 255
+    """Trace with the model's own device and dtype (a half model on CUDA gives an fp16 graph)."""
+    p = next(model.parameters())
+    x = (torch.rand(batch, 3, img, img, device=p.device) * 255).to(p.dtype)
     # the fused eval fast path of nn.TransformerEncoderLayer (AIFI) has no ONNX symbolic
     torch.backends.mha.set_fastpath_enabled(False)
     torch.onnx.export(model, (x,), str(path), input_names=["images"], output_names=["scores", "boxes", "embed"],
@@ -80,19 +82,24 @@ def main(argv=None):
     ap.add_argument("--img", type=int, default=640)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--opset", type=int, default=17)
-    ap.add_argument("--no-check", action="store_true")
+    ap.add_argument("--half", action="store_true",
+                    help="fp16 graph (traced on CUDA): what TensorRT >= 11 builds an fp16 engine from")
+    ap.add_argument("--no-check", action="store_true", help="skip the ONNX Runtime comparison (fp32 only)")
     args = parse_with_config(ap, argv)
 
     det = load_weights(build(args.size, args.classes, halo_zero=False), args.weights).eval()
     model = Deploy(det, args.img).eval()
-    out = Path(args.out or Path(args.weights).with_suffix(".onnx"))
+    if args.half:
+        model = model.cuda().half()
+    out = Path(args.out or Path(args.weights).with_suffix(".fp16.onnx" if args.half else ".onnx"))
     out.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
         export(model, out, args.batch, args.img, args.opset)
     info = {"weights": str(args.weights), "img": args.img, "batch": args.batch, "opset": args.opset,
+            "dtype": "float16" if args.half else "float32",
             "classes": RAILSAFE if args.classes == len(RAILSAFE) else args.classes,
             "mb": round(out.stat().st_size / 2 ** 20, 1)}
-    if not args.no_check:
+    if not (args.no_check or args.half):
         info["check"] = check(model, out, args.batch, args.img)
     out.with_suffix(".json").write_text(json.dumps(info, indent=1), encoding="utf-8")
     print(json.dumps(info, indent=1))

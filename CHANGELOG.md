@@ -10,6 +10,14 @@
 - `sarbon/paths.py`: data/runs/weights joylari, muhit o'zgaruvchilari bilan almashtiriladi.
 - `jobs/`: umumiy yordamchilar bilan GPU ishlari; `tools/`: data va kamera yordamchilari;
   `research/`: yopilgan tajribalar; `weights/`: chiqarilgan og'irliklar reestri.
+- Tezlik: kamera pipeline'ida detektor CUDA graph sifatida ishlaydi (natija aynan bir xil;
+  `--no-graph` bilan o'chadi). Treker 3x tez (batch Kalman, kichik matritsalar uchun yopiq formula).
+- `sarbon-export`: ONNX (normallashtirish va box dekodlash grafik ichida, `--half` = fp16);
+  `sarbon/inference/trt.py`: TensorRT engine qurish va ishga tushirish; `bench/speed.py`: barcha
+  rejimlar bitta jadvalda.
+- `tools/mine_hard_negatives.py`: ishonchli, lekin belgilanmagan topilmalarni ko'rib chiqish
+  varaqalariga chiqaradi; tasdiqlangan xatolar takrorlanadi, o'tkazib yuborilgan obyektlar qo'shiladi.
+- Bir nechta o'z datasetlari bitta o'qitishda (`--own SPLIT=MAP`), `railsafe_smart_s.yaml`.
 - Fayl ko'chishlari: `experiments/train_sarbon.py` → `sarbon/cli/train.py`,
   `scripts/run_camera.py` → `sarbon/cli/run.py`, `bench/compare_own.py` → `sarbon/cli/compare.py`,
   `sarbon/pipeline.py` → `sarbon/inference/video.py`, `DESIGN.md` → `docs/DESIGN.md`,

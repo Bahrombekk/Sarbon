@@ -11,7 +11,7 @@ process holds the GPU busy unless --force (then they are marked unreliable).
   python bench\speed.py --weights weights\sarbon-s-railsafe.pt --batch 1 4 --img 640
 """
 import argparse
-import importlib
+import copy
 import json
 import subprocess
 import sys
@@ -21,7 +21,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sarbon.cli.export import Deploy  # noqa: E402
+from sarbon.cli.export import Deploy, export  # noqa: E402
 from sarbon.data.coco import RAILSAFE  # noqa: E402
 from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
 
@@ -49,6 +49,8 @@ def timeit(fn, warmup, iters):
     return {"ms": round(ts[len(ts) // 2], 2), "p90": round(ts[int(len(ts) * 0.9)], 2)}
 
 
+TRT_DIR = Path("runs/trt")  # engines cached per weights file (name + mtime), batch and size
+TAG = "random"
 MODES = ["eager fp32", "eager fp16", "fp16 + channels_last", "torch.compile fp16", "CUDA graph fp16",
          "TensorRT fp16"]
 
@@ -82,9 +84,15 @@ def make(name, model, x):
             half(static)
         return g.replay
     if name == "TensorRT fp16":
-        importlib.import_module("tensorrt")  # fails with a clear reason when not installed
-        raise NotImplementedError("tensorrt found: build an engine from sarbon-export's ONNX "
-                                  "(trtexec --onnx=... --fp16) and time it here")
+        from sarbon.inference.trt import TrtDetector, build_engine
+        TRT_DIR.mkdir(parents=True, exist_ok=True)
+        engine = TRT_DIR / f"{TAG}_b{x.shape[0]}_{x.shape[-1]}.engine"
+        if not engine.exists():
+            onnx = engine.with_suffix(".fp16.onnx")
+            export(copy.deepcopy(model).half(), onnx, x.shape[0], x.shape[-1], 17)
+            build_engine(onnx, engine)
+        det = TrtDetector(engine)
+        return lambda: det(x)
     raise ValueError(name)
 
 
@@ -100,6 +108,10 @@ def main():
     ap.add_argument("--force", action="store_true", help="measure even if the GPU is busy (marked unreliable)")
     args = ap.parse_args()
 
+    global TAG
+    if args.weights:
+        w = Path(args.weights)
+        TAG = f"{w.stem}_{int(w.stat().st_mtime)}"
     util = gpu_util()
     busy = util > 10
     if busy and not args.force:
