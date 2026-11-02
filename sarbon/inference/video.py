@@ -36,11 +36,13 @@ def boxes_to_block_mask(boxes, hb, wb, block, margin=0):
 class SarbonVideo:
     def __init__(self, detector, n_cams, size=(640, 1152), tracker_cfg: TrackerConfig = None,
                  tau=0.0, keep_score=0.1, max_dets=100, use_color=True, track_steer=True,
-                 class_names=None, device="cuda", refresh=0, calibrate=True):
+                 class_names=None, device="cuda", refresh=0, calibrate=True, graph=True):
         """tau: per-pixel change (in 0..1 image units, averaged over the block) below which a
         block counts as unchanged. refresh: recompute every block at least every `refresh`
         steps (bounded staleness). calibrate: time sparse vs dense on the first frame and fall
-        back to the dense stem above the measured crossover (scene cuts, camera shake)."""
+        back to the dense stem above the measured crossover (scene cuts, camera shake).
+        graph: replay the detector after the stem as one CUDA graph (static shapes every frame);
+        same numbers as eager, without the per-kernel launch overhead that dominates at small batch."""
         self.dev = torch.device(device)
         self.det = detector.eval().to(self.dev)
         self.n, (self.h, self.w) = n_cams, size
@@ -61,6 +63,8 @@ class SarbonVideo:
         self.calibrate, self.calibration = calibrate, None
         self._mean = torch.from_numpy(MEAN).to(self.dev)
         self._std = torch.from_numpy(STD).to(self.dev)
+        self.graph = graph and self.dev.type == "cuda"
+        self._graph = self._graph_in = self._graph_out = None
         self.started = False
         self.stats = {"frames": 0, "active_blocks": []}
 
@@ -87,6 +91,29 @@ class SarbonVideo:
         self.stats["active_blocks"].append(k / self.engine.n_blocks if k >= 0 else 1.0)
         return self.engine.outputs_nchw()[1]
 
+    def _run_det(self, p8):
+        with torch.autocast(self.dev.type, torch.float16, enabled=self.dev.type == "cuda"):
+            return self.det(None, p8=p8)
+
+    def _detect(self, p8):
+        """Detector from p8 on; captured once as a CUDA graph, then replayed with new input."""
+        if not self.graph:
+            return self._run_det(p8)
+        if self._graph is None:
+            self._graph_in = p8.clone()
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s):
+                for _ in range(3):  # allocations and cudnn autotuning happen outside the capture
+                    self._run_det(self._graph_in)
+            torch.cuda.current_stream().wait_stream(s)
+            self._graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._graph):
+                self._graph_out = self._run_det(self._graph_in)
+        self._graph_in.copy_(p8)
+        self._graph.replay()
+        return self._graph_out
+
     def _steer(self, scale):
         if self.engine is None or not (self.track_steer and self.tau > 0):
             return
@@ -109,8 +136,7 @@ class SarbonVideo:
         scale = np.array([w0 / self.w, h0 / self.h])
         p8 = self._stem(self._prep(frames))
         self.started = True
-        with torch.autocast(self.dev.type, torch.float16, enabled=self.dev.type == "cuda"):
-            out = self.det(None, p8=p8)
+        out = self._detect(p8)
         scores_all = out["pred_logits"].float().sigmoid()
         boxes_all = cxcywh_to_xyxy(out["pred_boxes"].float())
         results = []

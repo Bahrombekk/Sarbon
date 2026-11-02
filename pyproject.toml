@@ -29,6 +29,7 @@ sarbon-pretrain = "sarbon.cli.pretrain:main"
 sarbon-train-track = "sarbon.cli.train_track:main"
 sarbon-run = "sarbon.cli.run:main"
 sarbon-compare = "sarbon.cli.compare:main"
+sarbon-export = "sarbon.cli.export:main"
 
 [tool.setuptools.packages.find]
 include = ["sarbon*"]

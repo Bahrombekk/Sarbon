@@ -38,6 +38,7 @@ def main():
                     "(384x640 faster, 640x1152 sees small/far objects better)")
     ap.add_argument("--view", type=int, default=1280, help="width each camera is processed and shown at")
     ap.add_argument("--conf", type=float, default=0.3, help="detection score for starting a track")
+    ap.add_argument("--no-graph", action="store_true", help="run the detector eagerly instead of as a CUDA graph")
     ap.add_argument("--sparse", action="store_true", help="block-sparse stem: recompute only changed blocks")
     ap.add_argument("--tau", type=float, default=8 / 255, help="with --sparse: per-pixel change below this "
                     "counts as noise (0 = lossless, every compression flicker recomputes the block)")
@@ -65,7 +66,7 @@ def main():
     det = load_weights(build("s", len(RAILSAFE), halo_zero=False), args.weights)
     cfg = TrackerConfig(high=args.conf, new=args.conf, emb=True, color=0.7, reid=True, ground=True)
     video = SarbonVideo(det, len(srcs), size=(h, w), tracker_cfg=cfg, class_names=RAILSAFE, device=dev,
-                        tau=args.tau if args.sparse else 0.0)
+                        tau=args.tau if args.sparse else 0.0, graph=not args.no_graph)
     if not args.sparse:
         video.engine = None
     print(f"model {Path(args.weights).name} on {dev}, input {h}x{w}, {len(srcs)} source(s)"
