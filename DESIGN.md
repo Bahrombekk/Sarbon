@@ -605,6 +605,11 @@ rasmlar bor, shuning uchun **bu og'irliklar mahsulotga kirmaydi**, ular faqat ar
 Natija jadvalda init va epoxa bilan birga beriladi (YOLO11s: scratch, 600 ep; D-FINE-S: ImageNet, 120+ ep).
 Yakuniy raqam rasmiy pycocotools eval'da (asl koordinatalar, crowd = ignore) qayta o'lchanadi.
 
+**Natija (2026-11-01, ichki eval, letterbox koordinatalarda):** eng yaxshi AP **42.6** (ep52), oxirgi
+(ep72) 42.6; AP50 59.7, AP75 45.7, APs 20.4, APm 39.4, APl 57.1. Ep48 dan keyin plato, overfit yo'q.
+YOLO11s 47.0 / D-FINE-S 48.5 dan **~4.5–6 AP orqada**, asosiy farq kichik obyektlarda. Rasmiy eval hali
+qilinmagan.
+
 ### RailSafe o'z ma'lumoti: qisman yorliqlar bilan o'qitish (2026-10-30)
 
 Foydalanuvchining `pereezd_dataset` (YOLO format, 8 413 kadr 2560x1440, 47 video, 2 klass:
@@ -622,6 +627,20 @@ yengil 42.5k / og'ir 2.8k box) ko'rib chiqildi:
   ko'chiriladi (car → yengil, truck → og'ir), train yangidan.
 - Baholash ikki xil: COCO val (6 klass) va o'z val'imiz (faqat yengil/og'ir); eng yaxshi checkpoint
   o'z val'imiz bo'yicha tanlanadi. Navbat: `scripts/run_queue3.ps1` (benchmark tugagach, 24 epoxa).
+
+**Natija (2026-11-01).** O'z val (1 691 kadr, yengil + og'ir), bir xil evaluator (`bench/compare_own.py`):
+
+| Model | AP | AP50 | AP75 | APs | APm | APl |
+|---|---|---|---|---|---|---|
+| Sarbon-S (COCO 6 klass + o'z data, 24 ep, best ep6) | **74.1** | **88.1** | **81.7** | 44.5 | **80.4** | **86.1** |
+| YOLO11s (COCO pretrained, faqat o'z data, 50 ep) | 69.3 | 83.0 | 76.2 | **57.2** | 75.9 | 78.2 |
+
+- Sarbon +4.8 AP, lekin **kichik obyektlarda −12.7 AP**: bu eng katta zaif nuqta (COCO'dagi kabi).
+- O'z val'da eng yaxshi natija ep6 da, keyin biroz pasaydi (73.1). COCO 6-klass AP 38.96 → 40.8
+  (unutish yo'q).
+- Tezlik **hali o'lchanmagan deb hisoblanadi**: eager PyTorch, batch 1 da RTX 5090 bir xil model uchun
+  11–78 ms orasida sakraydi (CPU kernel-launch va GPU P-state'ga bog'liq). Adolatli o'lchov: ikkala model
+  ONNX → TensorRT fp16, bir xil sharoitda.
 
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
