@@ -42,6 +42,7 @@ from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
 from sarbon.models.sarbon_det import load_detector  # noqa: E402
 from sarbon.paths import DEFAULT_DETECTOR  # noqa: E402
 
+# box corners normalised to 0..1 of the image: the loader decodes big JPEGs at 1/2..1/8 size
 FIELDS = ["id", "image", "class", "score", "x0", "y0", "x1", "y1", "verdict"]
 TILE, COLS, ROWS = 200, 8, 6
 
@@ -63,7 +64,7 @@ def iou(a, b):
 def tile(path, box, text):
     """Context crop around a box (3x its size, at least 96 px), box drawn, number + score written."""
     img = imread_at_least(path, 1 << 30)
-    x0, y0, x1, y1 = box
+    x0, y0, x1, y1 = np.asarray(box) * ([img.shape[1], img.shape[0]] * 2)
     half = max(48, 1.5 * max(x1 - x0, y1 - y0))
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     a = [int(max(0, cx - half)), int(max(0, cy - half))]
@@ -114,9 +115,11 @@ def mine(args):
                 taken.append(j)
                 if len(taken) > args.per_image:
                     break
-                orig = (bx[j] - np.array([px, py, px, py])) / s
+                # letterbox -> decoded image pixels -> 0..1 (decoded size = unpadded input / s)
+                dec = np.array([args.img - 2 * px, args.img - 2 * py] * 2) / s
+                orig = np.clip((bx[j] - np.array([px, py, px, py])) / s / dec, 0, 1)
                 cands.append({"image": ds.images[iid]["file_name"], "class": RAILSAFE[int(cl[j])],
-                              "score": round(float(sc[j]), 3), "box": orig.round(1).tolist()})
+                              "score": round(float(sc[j]), 3), "box": orig.round(5).tolist()})
         print(f"\r{min(start + args.batch, len(ds))}/{len(ds)} frames, {len(cands)} candidates", end="")
     print()
     cands.sort(key=lambda c: -c["score"])
@@ -169,12 +172,9 @@ def build_split(args):
         if dst.exists():
             dst.unlink()
         link(src, dst)
-        h, w = imread_at_least(img, 1 << 30).shape[:2]
         lines = label_path(src).read_text(encoding="utf-8").splitlines() if label_path(src).exists() else []
-        for c, (x0, y0, x1, y1) in boxes:
-            x0, x1 = np.clip([x0, x1], 0, w)
-            y0, y1 = np.clip([y0, y1], 0, h)
-            lines.append(f"{c} {(x0 + x1) / 2 / w:.6f} {(y0 + y1) / 2 / h:.6f} {(x1 - x0) / w:.6f} {(y1 - y0) / h:.6f}")
+        for c, (x0, y0, x1, y1) in boxes:  # already normalised
+            lines.append(f"{c} {(x0 + x1) / 2:.6f} {(y0 + y1) / 2:.6f} {x1 - x0:.6f} {y1 - y0:.6f}")
         (split / "labels" / f"{src.stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         moved[img] = str(dst)
     train = []
