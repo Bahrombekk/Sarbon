@@ -12,6 +12,7 @@ from geometry alone. Motion is then constant-velocity in metres, which it is for
 walkers -- in pixels the same walker speeds up and grows when approaching.
 """
 import numpy as np
+from .kalman import inv2
 
 
 class GroundModel:
@@ -99,6 +100,24 @@ class GroundKalman:
     def predict(self, mean, cov):
         g = np.array([[0.5, 0], [0, 0.5], [1, 0], [0, 1]])
         return self.F @ mean, self.F @ cov @ self.F.T + g @ g.T * self.q ** 2
+
+    def predict_batch(self, means, covs):
+        g = np.array([[0.5, 0], [0, 0.5], [1, 0], [0, 1]])
+        return means @ self.F.T, self.F @ covs @ self.F.T + g @ g.T * self.q ** 2
+
+    def update_batch(self, means, covs, zs, rs):
+        k = covs[:, :, :2] @ inv2(covs[:, :2, :2] + rs)
+        means = means + (k @ (zs - means[:, :2])[..., None])[..., 0]
+        return means, covs - k @ covs[:, :2, :]
+
+    def mahalanobis_pairs(self, means, covs, zs, rs):
+        """Squared Mahalanobis for every (track, measurement) pair: [T, 4], [T, 4, 4] x [N, 2], [N, 2, 2]."""
+        s = covs[:, None, :2, :2] + rs[None]  # [T, N, 2, 2]
+        d = zs[None] - means[:, None, :2]
+        det = s[..., 0, 0] * s[..., 1, 1] - s[..., 0, 1] * s[..., 1, 0]
+        num = (d[..., 0] ** 2 * s[..., 1, 1] - d[..., 0] * d[..., 1] * (s[..., 0, 1] + s[..., 1, 0])
+               + d[..., 1] ** 2 * s[..., 0, 0])
+        return num / det
 
     def project(self, mean, cov, r):
         return self.Hm @ mean, self.Hm @ cov @ self.Hm.T + r

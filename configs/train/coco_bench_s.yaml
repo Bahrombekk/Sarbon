@@ -1,0 +1,13 @@
+# RESEARCH ONLY: all 80 classes and all COCO images (includes non-commercial licences), for comparison
+# with published YOLO / D-FINE numbers. These weights must never ship. Result: 42.6 AP (ep52).
+coco: C:/data/coco
+benchmark: true
+size: s
+epochs: 72
+batch: 16
+workers: 12
+no_halo_zero: true
+init: runs/pretrain/s_distill.pt
+tag: _distill
+out: runs/sarbon
+resume: true

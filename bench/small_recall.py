@@ -20,13 +20,12 @@ import torch
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
-from compare_own import yolo_dets  # noqa: E402
 from sarbon.data.coco import collate  # noqa: E402
+from sarbon.cli.compare import yolo_dets  # noqa: E402
 from sarbon.data.yolo import YoloDetection  # noqa: E402
+from sarbon.engine import prep  # noqa: E402
 from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
 from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
-from train_sarbon import prep  # noqa: E402
 
 BINS = [(0, 16), (16, 32), (32, 96), (96, 1e9)]  # sqrt(area) in letterbox pixels
 

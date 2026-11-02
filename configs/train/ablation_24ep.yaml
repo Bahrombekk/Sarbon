@@ -1,0 +1,12 @@
+# Short from-scratch recipe for architecture ablations (baseline: AP 30.2, AP_small 11.0).
+# Add the one option under test on the command line, e.g.
+#   sarbon-train --config configs/train/ablation_24ep.yaml --nwd 1 --tag _nwd1
+coco: C:/data/coco
+size: s
+epochs: 24
+no_aug_epochs: 2
+batch: 16
+workers: 12
+no_halo_zero: true
+out: runs/ablate2
+resume: true

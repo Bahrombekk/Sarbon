@@ -13,7 +13,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
 from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
-from sarbon.pipeline import SarbonVideo  # noqa: E402
+from sarbon.inference.video import SarbonVideo  # noqa: E402
 from scenes import Camera  # noqa: E402
 
 

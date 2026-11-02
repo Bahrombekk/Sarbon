@@ -1,0 +1,12 @@
+# Commercial base detector: 6 surveillance classes, commercial-license COCO images only,
+# DINOv2-distilled init (runs/sarbon/s_distill, AP 39.0). Usage: sarbon-train --config configs/train/coco_s.yaml
+coco: C:/data/coco
+size: s
+epochs: 72
+batch: 16
+workers: 12
+no_halo_zero: true
+init: runs/pretrain/s_distill.pt
+tag: _distill
+out: runs/sarbon
+resume: true

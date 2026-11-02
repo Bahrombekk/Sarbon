@@ -107,13 +107,6 @@ class Track:
             self.id, Track._next = Track._next, Track._next + 1
         self.state = TRACKED
 
-    def predict(self, gkf):
-        if self.state != TRACKED:
-            self.mean[7] = 0.0  # ByteTrack: freeze height velocity while not tracked
-        self.mean, self.cov = self.kf.predict(self.mean, self.cov)
-        if self.g is not None:
-            self.g = gkf.predict(*self.g)
-
     @property
     def box(self):
         return xyah_to_xyxy(self.mean)
@@ -139,9 +132,13 @@ class Track:
         n = np.linalg.norm(d)
         return d / n if n > 1e-6 else None
 
-    def update(self, box, score, feat, color, frame, cfg, ground=None, gkf=None, size_norm=None):
+    def update(self, box, score, feat, color, frame, cfg, ground=None, gkf=None, size_norm=None,
+               filtered=None):
+        """`filtered` = (mean, cov, g) already computed by the tracker's batched Kalman step."""
         gap = frame - self.last_frame
-        if cfg.oru and gap > 1:
+        if filtered is not None:
+            self.mean, self.cov, self.g = filtered
+        elif cfg.oru and gap > 1:
             # observation-centric re-update: replay the gap along a straight virtual path
             self.mean, self.cov = (x.copy() for x in self.snapshot)
             for k in range(1, gap):
@@ -149,12 +146,14 @@ class Track:
                 virt = self.last_box + (box - self.last_box) * k / gap
                 self.mean, self.cov = self.kf.update(self.mean, self.cov, xyxy_to_xyah(virt))
             self.mean, self.cov = self.kf.predict(self.mean, self.cov)
-        self.mean, self.cov = self.kf.update(self.mean, self.cov, xyxy_to_xyah(box),
-                                             score if self.nsa else None)
+        if filtered is None:
+            self.mean, self.cov = self.kf.update(self.mean, self.cov, xyxy_to_xyah(box),
+                                                 score if self.nsa else None)
         self.snapshot = (self.mean.copy(), self.cov.copy())
         if ground is not None:
             z, r = ground
-            self.g = gkf.initiate(z, r) if self.g is None else gkf.update(*self.g, z, r)
+            if filtered is None:
+                self.g = gkf.initiate(z, r) if self.g is None else gkf.update(*self.g, z, r)
             self.g_last = z.copy()
         if size_norm is not None:
             self.size_norm = size_norm if self.size_norm is None else 0.9 * self.size_norm + 0.1 * size_norm
@@ -183,14 +182,17 @@ class SarbonTracker:
         """Ground position, measurement covariance and normalised size per detection."""
         if not (self.cfg.ground and self.gm.ready) or len(boxes) == 0:
             return None
-        out = []
-        for b in boxes:
-            x, y = self.gm.foot(b)
-            w, h = b[2] - b[0], b[3] - b[1]
-            j = self.gm.jacobian(x, y)
-            r = j @ np.diag([(0.05 * w + 1) ** 2, (0.03 * h + 1) ** 2]) @ j.T
-            out.append((self.gm.to_ground(x, y), r, h / max(self.gm.expected_height(y), 1e-6)))
-        return out
+        gm = self.gm
+        x, y = (boxes[:, 0] + boxes[:, 2]) / 2, boxes[:, 3]  # foot points
+        w, h = boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1]
+        d, hc = np.maximum(y - gm.y0, 1.0), gm.cam_height
+        j = np.zeros((len(boxes), 2, 2))  # GroundModel.jacobian for every foot point
+        j[:, 0, 0], j[:, 0, 1], j[:, 1, 1] = hc / d, -(x - gm.cx) * hc / d ** 2, -gm.f * hc / d ** 2
+        noise = np.stack([(0.05 * w + 1) ** 2, (0.03 * h + 1) ** 2], -1)
+        r = (j * noise[:, None, :]) @ j.transpose(0, 2, 1)
+        z = gm.to_ground(x, y)
+        sn = h / np.maximum(gm.expected_height(y), 1e-6)
+        return list(zip(z, r, sn))
 
     # ---------------- costs ----------------
     def _appearance(self, tracks, feats, colors):
@@ -206,11 +208,13 @@ class SarbonTracker:
     def _ground_cost(self, tracks, geo):
         """Squared Mahalanobis on the ground / chi2 gate; inf where a track has no ground state."""
         g = np.full((len(tracks), len(geo)), np.inf)
-        zs = np.array([x[0] for x in geo])
-        rs = np.array([x[1] for x in geo])
-        for i, t in enumerate(tracks):
-            if t.g is not None:
-                g[i] = self.gkf.mahalanobis(*t.g, zs, rs) / CHI2_2DOF_99
+        rows = [i for i, t in enumerate(tracks) if t.g is not None]
+        if rows:
+            zs = np.array([x[0] for x in geo])
+            rs = np.array([x[1] for x in geo])
+            gm = np.stack([tracks[i].g[0] for i in rows])
+            gc = np.stack([tracks[i].g[1] for i in rows])
+            g[rows] = self.gkf.mahalanobis_pairs(gm, gc, zs, rs) / CHI2_2DOF_99
         return g
 
     def _cost(self, tracks, boxes, scores, feats, colors, geo, use_app, use_last=False):
@@ -258,23 +262,27 @@ class SarbonTracker:
             return np.ones((len(tracks), len(boxes)))
         centers = (boxes[:, :2] + boxes[:, 2:]) / 2
         heights = boxes[:, 3] - boxes[:, 1]
+        on_ground = np.array([geo is not None and t.g is not None for t in tracks])
+        expect, reach, ref = np.zeros((len(tracks), 2)), np.zeros(len(tracks)), np.ones(len(tracks))
         for i, t in enumerate(tracks):
             gap = self.frame - t.last_frame
-            if geo is not None and t.g is not None:
+            if on_ground[i]:
                 # on the ground: walkers keep a constant speed in metres behind occluders
-                zs = np.array([x[0] for x in geo])
-                expect = t.g[0][:2]
-                reach = cfg.reid_speed_slack * np.linalg.norm(t.g[0][2:]) * gap + cfg.ground_reach
-                far = np.linalg.norm(zs - expect, axis=1) > reach
-                sn = np.array([x[2] for x in geo])
-                ratio = sn / max(t.size_norm or 1.0, 1e-6)  # same real size wherever it stands
+                expect[i] = t.g[0][:2]
+                reach[i] = cfg.reid_speed_slack * np.linalg.norm(t.g[0][2:]) * gap + cfg.ground_reach
+                ref[i] = max(t.size_norm or 1.0, 1e-6)  # same real size wherever it stands
             else:
-                h = t.last_box[3] - t.last_box[1]
-                expect = (t.last_box[:2] + t.last_box[2:]) / 2 + t.velocity() * gap
-                reach = cfg.reid_speed_slack * np.linalg.norm(t.velocity()) * gap + cfg.reid_reach * h
-                far = np.linalg.norm(centers - expect, axis=1) > reach
-                ratio = heights / max(h, 1e-6)
-            cost[i, far | (ratio < 0.67) | (ratio > 1.5)] = 1.0
+                h, v = t.last_box[3] - t.last_box[1], t.velocity()
+                expect[i] = (t.last_box[:2] + t.last_box[2:]) / 2 + v * gap
+                reach[i] = cfg.reid_speed_slack * np.linalg.norm(v) * gap + cfg.reid_reach * h
+                ref[i] = max(h, 1e-6)
+        pos, size = centers[None], heights[None]
+        if on_ground.any():
+            pos = np.where(on_ground[:, None, None], np.array([x[0] for x in geo])[None], pos)
+            size = np.where(on_ground[:, None], np.array([x[2] for x in geo])[None], size)
+        far = np.linalg.norm(pos - expect[:, None], axis=-1) > reach[:, None]
+        ratio = size / ref[:, None]
+        cost[far | (ratio < 0.67) | (ratio > 1.5)] = 1.0
         return cost
 
     # ---------------- main loop ----------------
@@ -291,8 +299,7 @@ class SarbonTracker:
         colors = None if (colors is None or not cfg.color) else np.asarray(colors, float)
         use_app = feats is not None or colors is not None
         geo = self._ground(boxes)
-        for t in self.tracks:
-            t.predict(self.gkf)
+        self._predict_all()
         hi = np.where(scores >= cfg.high)[0]
         lo = np.where((scores >= cfg.low) & (scores < cfg.high))[0]
         confirmed = [t for t in self.tracks if t.state != TENTATIVE]
@@ -303,11 +310,15 @@ class SarbonTracker:
                     None if colors is None else colors[idx], None if geo is None else [geo[k] for k in idx])
 
         def apply(ts, idx, matches):
+            if not matches:
+                return
             b, s, f, c, g = sub(idx)
-            for i, j in matches:
+            filt = self._filter_batch([ts[i] for i, _ in matches], [j for _, j in matches], b, s, g)
+            for k, (i, j) in enumerate(matches):
                 gm = None if g is None else (g[j][0], g[j][1])
                 ts[i].update(b[j], s[j], None if f is None else f[j], None if c is None else c[j],
-                             self.frame, cfg, gm, self.gkf, None if g is None else g[j][2])
+                             self.frame, cfg, gm, self.gkf, None if g is None else g[j][2],
+                             None if filt is None else filt[k])
                 ts[i].activate()
 
         # stage 1: high-score detections vs tracked + lost tracks
@@ -363,6 +374,44 @@ class SarbonTracker:
         self._calibrate(boxes, scores)
         return [(t.id, t.last_box.copy(), t.score, None if t.g_last is None else t.g_last.copy())
                 for t in self.tracks if t.state == TRACKED and t.last_frame == self.frame]
+
+    def _predict_all(self):
+        """Kalman predict of every track in one batched step (image and ground filters)."""
+        ts = self.tracks
+        if not ts:
+            return
+        m = np.stack([t.mean for t in ts])
+        m[np.array([t.state != TRACKED for t in ts]), 7] = 0.0  # ByteTrack: freeze height velocity
+        m, c = self.kf.predict_batch(m, np.stack([t.cov for t in ts]))
+        for t, a, b in zip(ts, m, c):
+            t.mean, t.cov = a, b
+        gt = [t for t in ts if t.g is not None]
+        if gt:
+            gm, gc = self.gkf.predict_batch(np.stack([t.g[0] for t in gt]), np.stack([t.g[1] for t in gt]))
+            for t, a, b in zip(gt, gm, gc):
+                t.g = (a, b)
+
+    def _filter_batch(self, ts, js, b, s, g):
+        """Batched Kalman update of matched tracks -> [(mean, cov, g)], or None to update one by one."""
+        if self.cfg.oru and any(self.frame - t.last_frame > 1 for t in ts):
+            return None  # observation-centric re-update replays each gap sequentially
+        z = np.stack([xyxy_to_xyah(b[j]) for j in js])
+        m, c = self.kf.update_batch(np.stack([t.mean for t in ts]), np.stack([t.cov for t in ts]), z,
+                                    s[js] if self.cfg.nsa else None)
+        gs = [t.g for t in ts]
+        if g is not None:
+            old = [k for k, t in enumerate(ts) if t.g is not None]
+            for k, t in enumerate(ts):
+                if t.g is None:
+                    gs[k] = self.gkf.initiate(*g[js[k]][:2])
+            if old:
+                gm, gc = self.gkf.update_batch(np.stack([ts[k].g[0] for k in old]),
+                                               np.stack([ts[k].g[1] for k in old]),
+                                               np.stack([g[js[k]][0] for k in old]),
+                                               np.stack([g[js[k]][1] for k in old]))
+                for k, a, cc in zip(old, gm, gc):
+                    gs[k] = (a, cc)
+        return list(zip(m, c, gs))
 
     def _calibrate(self, boxes, scores):
         """Feed confident, unoccluded, well-established tracks to the ground model."""

@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bench"))
 from sarbon.models.sarbon_det import build  # noqa: E402
-from sarbon.pipeline import SarbonVideo, boxes_to_block_mask  # noqa: E402
+from sarbon.inference.video import SarbonVideo, boxes_to_block_mask  # noqa: E402
 from sarbon.sparse.convert import stem_to_local  # noqa: E402
 from scenes import Camera  # noqa: E402
 
