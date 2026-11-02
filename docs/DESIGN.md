@@ -687,6 +687,51 @@ Bundan tashqari:
 - Stem umumiy vaqtning kichik qismi. Tezlik uchun asosiy ish dense core + dekoder (TensorRT) va
   treker (yo'qolgan treklar 300 kadr saqlanadi, vaqt 15 → 60 ms o'sadi).
 
+### Tezlik: CUDA graph va TensorRT (2026-11-02, GPU o'qitish bilan band paytda)
+
+Sarbon-S, 640x640, fp16: eager 31.6 ms → CUDA graph 2.1 ms → TensorRT 1.44 ms (1 kadr); 4 kadrda
+TensorRT 0.51 ms/kadr. Wide backbone (18.5M) TensorRT'da 1 kadrda +3%, 4 kadrda +25% (0.63 ms/kadr).
+TensorRT detektsiyalari PyTorch fp16 bilan 338/343 mos (IoU > 0.9). Demak katta GPU'da neyron tarmoq
+endi to'siq emas: pipeline vaqti asosan CPU tomonda (resize, rang gistogrammasi, treker).
+
+### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
+
+Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
+pereezd yozuvi (`C:\data\recordings`, har biri 10 daqiqa = 12000 kadr), har kadr bir marta to'liq
+hisoblangan (`tools/dense_reference.py`), siyosatlar oflayn simulyatsiya qilingan
+(`bench/scheduler_eval.py`). O'lchov — har kadrni hisoblaydigan pipeline'ga sodiqlik (recall,
+yangi obyekt kechikishi). Siyosatlar `sarbon/schedule/policies.py` da.
+
+Bitta kamera, o'z chegarasi bilan (o'rtacha 5 kamera):
+
+| Siyosat | Hisoblash | Recall | Odam recall | Kechikish p95 |
+|---|---|---|---|---|
+| har 2-kadr | 0.50 | 0.917 | 0.895 | 0.53 s |
+| har 3-kadr | 0.33 | 0.841 | 0.824 | 1.08 s |
+| harakat > 1 | 0.64 | 0.904 | 0.866 | 0.96 s |
+| debt x1.5 | 0.65 | 0.929 | 0.907 | 0.49 s |
+| debt x3 | 0.40 | 0.854 | 0.825 | 1.05 s |
+
+5 kamera umumiy byudjetda (har taktda K kamera hisoblanadi):
+
+| K (hisoblash) | Round robin | Debt v0 | Oracle (kelajakni biladi) |
+|---|---|---|---|
+| 1 (0.2) | 0.802 | 0.764 | 0.796 |
+| 2 (0.4) | 0.869 | 0.855 | 0.902 (p95 kechikish 0.85 → 0.50 s) |
+| 3 (0.6) | 0.926 | 0.914 | 0.945 (0.42 → 0.22 s) |
+| 4 (0.8) | 0.962 | 0.961 | 0.969 |
+
+Xulosalar:
+- Qo'lda yozilgan debt oddiy stride'lar aralashmasidan yaxshi emas; umumiy byudjetda round robin'dan
+  biroz yomon. Harakatga qarab gating ham yutmaydi.
+- Oracle ham round robin'dan atigi +2..3 recall ustun (kechikish ikki baravar kam). Demak bu
+  chorrahalarda (kadriga 20–50 obyekt, tinch davr yo'q) "qachon hisoblash" bo'yicha zaxira kichik;
+  o'rganilgan debt eng yaxshi holda shu +3 ni oladi.
+- Asosiy yo'qotish o'tkazib yuborilgan kadrning o'zida: 50% hisoblashda recall 0.92 ga tushadi,
+  yangi paydo bo'lgan treklarda yo'qotish 17%, barqaror treklarda 2.7%. Keyingi dastak: o'tkazib
+  yuborish o'rniga arzon qisman hisoblash (past o'lcham yoki faqat o'zgargan hudud) va siyrak
+  kadrlarga moslashgan treker; scheduler tinch kameralar ko'p bo'lgan tarmoqlarda qayta sinaladi.
+
 ### Kechki GPU sessiyasi rejasi (GPU bo'shagach)
 
 1. `tests/test_fused_engine.py` va `tests/test_block_local.py` ishga tushiriladi.

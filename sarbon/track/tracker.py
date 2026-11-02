@@ -375,6 +375,16 @@ class SarbonTracker:
         return [(t.id, t.last_box.copy(), t.score, None if t.g_last is None else t.g_last.copy())
                 for t in self.tracks if t.state == TRACKED and t.last_frame == self.frame]
 
+    def coast(self):
+        """A frame the detector did not run on: advance every track by its motion model only.
+
+        Nothing is matched, born or lost; returns the predicted boxes of the live tracks in the
+        same form as update(), so a compute scheduler can skip frames transparently.
+        """
+        self.frame += 1
+        self._predict_all()
+        return [(t.id, t.box.copy(), t.score, None) for t in self.tracks if t.state == TRACKED]
+
     def _predict_all(self):
         """Kalman predict of every track in one batched step (image and ground filters)."""
         ts = self.tracks
