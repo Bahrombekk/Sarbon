@@ -1,10 +1,10 @@
 # railsafe_s.yaml with reviewed label completion (tools/mine_hard_negatives.py, 2026-11-02):
-# 393 confident vehicles the crossing labels missed (mostly distant / cut at the border) added,
-# 8 real false-positive frames (wagon bogies, signs, overlays) repeated 3x. Val is unchanged,
+# 964 confident vehicles the crossing labels missed (mostly distant / cut at the border) added,
+# 29 real false-positive frames (wagons, signs, barriers, overlays) repeated 3x. Val is unchanged,
 # so its own_AP still counts the unlabelled distant cars as false positives.
 coco: C:/data/coco
 taxonomy: railsafe
-yolo: C:/data/pereezd_hardneg/split
+yolo: C:/data/pereezd_hardneg_all/split
 yolo_map: "0:3,1:4"
 init: runs/sarbon/s_distill/best.pt
 init_classes: surveillance
