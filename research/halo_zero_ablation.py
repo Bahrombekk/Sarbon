@@ -3,10 +3,10 @@
 Decision rule (DESIGN.md): adopt halo-zero if AP drop <= 1.0 and AP_small drop <= 1.5.
 
 GPU run (COCO 2017, surveillance classes, commercial-license images only):
-  .venv\\Scripts\\python.exe experiments\\halo_zero_ablation.py --coco D:\\data\\coco --variant standard
-  .venv\\Scripts\\python.exe experiments\\halo_zero_ablation.py --coco D:\\data\\coco --variant halo
+  .venv\\Scripts\\python.exe research\\halo_zero_ablation.py --coco D:\\data\\coco --variant standard
+  .venv\\Scripts\\python.exe research\\halo_zero_ablation.py --coco D:\\data\\coco --variant halo
 CPU smoke test:
-  .venv\\Scripts\\python.exe experiments\\halo_zero_ablation.py --synthetic --device cpu --epochs 2
+  .venv\\Scripts\\python.exe research\\halo_zero_ablation.py --synthetic --device cpu --epochs 2
 """
 import argparse
 import contextlib

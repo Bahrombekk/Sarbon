@@ -1,5 +1,10 @@
 # Sarbon — o'zgarishga qarab hisoblaydigan detektor + treker
 
+> Fayl yo'llari 0.2.0 da o'zgardi (CHANGELOG.md). Quyidagi tarixiy yozuvlardagi eski yo'llar:
+> `experiments/train_sarbon.py` → `sarbon/cli/train.py` (`sarbon-train`), `scripts/run_camera.py` →
+> `sarbon/cli/run.py` (`sarbon-run`), `bench/compare_own.py` → `sarbon/cli/compare.py`,
+> `sarbon/pipeline.py` → `sarbon/inference/video.py`, `scripts/*.py` → `tools/`, `scripts/*.ps1` → `jobs/`.
+
 > **Asosiy tezis:** statik kamerada hisoblash hajmi **piksellar soniga emas, sahnadagi o'zgarishga**
 > proporsional bo'lishi kerak. Kichik obyektlar uchun yuqori rezolyutsiya esa faqat
 > "qarash kerak bo'lgan" joyda ishlatiladi. Bu joylarni o'zgarish, track'lar va kichik obyekt

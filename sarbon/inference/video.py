@@ -13,10 +13,10 @@ import cv2
 import numpy as np
 import torch
 
-from .models.box_ops import cxcywh_to_xyxy
-from .sparse.convert import stem_to_local
-from .track import SarbonTracker, TrackerConfig
-from .track.appearance import color_descriptor
+from ..models.box_ops import cxcywh_to_xyxy
+from ..sparse.convert import stem_to_local
+from ..track import SarbonTracker, TrackerConfig
+from ..track.appearance import color_descriptor
 
 MEAN = np.array([0.485, 0.456, 0.406], np.float32) * 255
 STD = np.array([0.229, 0.224, 0.225], np.float32) * 255
@@ -53,7 +53,7 @@ class SarbonVideo:
         self.trackers = None  # created on the first frame (needs the camera resolution)
         self.engine = None
         if self.dev.type == "cuda":
-            from .sparse.fused_engine import FusedSparseEngine
+            from ..sparse.fused_engine import FusedSparseEngine
             local = stem_to_local(self.det.stem).to(self.dev)
             # the engine compares normalised frames: convert tau from image units
             self.engine = FusedSparseEngine(local, n_cams, self.h, self.w, dtype=torch.float16,

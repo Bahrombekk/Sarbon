@@ -1,167 +1,39 @@
-"""Train the Sarbon detector on COCO.
+"""Train the Sarbon detector.
 
-Two modes:
-  commercial (default): surveillance classes, commercial-license images only -> product weights
+Three modes:
+  commercial (default): surveillance classes, commercial-license COCO images only -> product weights
   --benchmark         : all 80 classes, all images -> comparable with published YOLO/D-FINE numbers
                         (research use only; these weights are not for the product)
   --taxonomy railsafe --yolo DIR : RailSafe classes (person, bicycle, motorcycle, yengil, og'ir,
                         train) from commercial COCO + own labelled crossing data; the own data
                         labels vehicles only, so its other classes are masked out of the loss
 
-  .venv\\Scripts\\python.exe experiments\\train_sarbon.py --coco D:\\data\\coco --size s
-  .venv\\Scripts\\python.exe experiments\\train_sarbon.py --coco D:\\data\\coco --size s --benchmark
-  .venv\\Scripts\\python.exe experiments\\train_sarbon.py --coco C:\\data\\coco --taxonomy railsafe \\
-      --yolo C:\\data\\pereezd_split --init runs\\sarbon\\s_distill\\best.pt --init-classes surveillance
+Every option can also come from a YAML file (--config configs/train/*.yaml); flags given on the
+command line override the file.
+
+  sarbon-train --config configs/train/railsafe_s.yaml
+  sarbon-train --coco C:\data\coco --size s --benchmark
 CPU smoke test:
-  .venv\\Scripts\\python.exe experiments\\train_sarbon.py --synthetic --device cpu --size n --epochs 2
+  sarbon-train --synthetic --device cpu --size n --epochs 2
 """
 import argparse
-import contextlib
-import copy
-import io
 import json
 import math
-import sys
 import time
 from pathlib import Path
 
 import torch
-from pycocotools.coco import COCO
-from pycocotools.cocoeval import COCOeval
 from torch.utils.data import ConcatDataset, DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sarbon.data.coco import (ALL, RAILSAFE, RAILSAFE_FROM_COCO, SURVEILLANCE, CocoDetection,  # noqa: E402
-                              MosaicDetection, SyntheticDetection, collate)
-from sarbon.data.yolo import WithClassMask, YoloDetection  # noqa: E402
-from sarbon.models.box_ops import cxcywh_to_xyxy, xyxy_to_cxcywh  # noqa: E402
-from sarbon.models.criterion import HungarianMatcher, SetCriterion  # noqa: E402
-from sarbon.models.sarbon_det import build  # noqa: E402
-
-MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255
-STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1) * 255
-
-
-def prep(imgs, device):
-    x = imgs.to(device, non_blocking=True).float()
-    return (x - MEAN.to(device)) / STD.to(device)
-
-
-def to_targets(boxes, labels, size, device, meta=None):
-    out = [{"labels": l.to(device), "boxes": xyxy_to_cxcywh(b.to(device) / size).clamp(0, 1)}
-           for b, l in zip(boxes, labels)]
-    for t, m in zip(out, meta or []):
-        if torch.is_tensor(m[-1]):  # WithClassMask: classes annotated in this image
-            t["valid"] = m[-1].to(device)
-    return out
-
-
-CLASS_KEYS = ("enc_cls.", "cls_heads.", "dn_label.")
-
-
-def load_init(model, path, src_names=None, dst_names=None, alias=None):
-    """Load every tensor whose shape fits. Class-indexed tensors are taken only when the
-    source class names are given: rows are then copied by name (alias: dst -> src name),
-    and classes the source never saw keep their fresh initialisation."""
-    sd = torch.load(path, map_location="cpu")
-    own = model.state_dict()
-    take, remapped = {}, 0
-    for k, v in sd.items():
-        if k not in own:
-            continue
-        if k.startswith(CLASS_KEYS):
-            if not (src_names and dst_names):
-                continue
-            new = own[k].clone()
-            for j, name in enumerate(dst_names):
-                src = (alias or {}).get(name, name)
-                if src in src_names:
-                    new[j] = v[src_names.index(src)]
-                    remapped += 1
-            if k.startswith("dn_label."):  # last row: padding token
-                new[-1] = v[-1]
-            take[k] = new
-        elif v.shape == own[k].shape:
-            take[k] = v
-    model.load_state_dict(take, strict=False)
-    return len(take), remapped
-
-
-class ModelEMA:
-    def __init__(self, model, decay=0.9999, warmup=2000):
-        self.ema = copy.deepcopy(model).eval()
-        for p in self.ema.parameters():
-            p.requires_grad_(False)
-        self.decay, self.warmup, self.updates = decay, warmup, 0
-
-    @torch.no_grad()
-    def update(self, model):
-        self.updates += 1
-        d = self.decay * (1 - math.exp(-self.updates / self.warmup))
-        msd = model.state_dict()
-        for k, v in self.ema.state_dict().items():
-            if v.dtype.is_floating_point:
-                v.mul_(d).add_(msd[k].detach(), alpha=1 - d)
-
-
-@torch.no_grad()
-def postprocess(out, size, k=300):
-    """DETR-style: top-k over (query, class) pairs; boxes in input pixels xyxy."""
-    scores = out["pred_logits"].sigmoid()
-    b, q, c = scores.shape
-    s, idx = scores.flatten(1).topk(min(k, q * c))
-    boxes = cxcywh_to_xyxy(out["pred_boxes"]).gather(1, (idx // c)[..., None].expand(-1, -1, 4)) * size
-    return [(boxes[i], s[i], idx[i] % c) for i in range(b)]
-
-
-def evaluate(model, ds, loader, device, num_classes, size, cats=None):
-    """COCO AP; cats: evaluate only these classes (the ones a dataset annotates)."""
-    dets = []
-    model.eval()
-    for imgs, _, _, meta in loader:
-        with torch.no_grad(), torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
-            out = model(prep(imgs, device))
-        for (boxes, scores, labels), m in zip(postprocess(out, size), meta):
-            for bb, s, l in zip(boxes.float().tolist(), scores.float().tolist(), labels.tolist()):
-                dets.append({"image_id": m[0], "category_id": l,
-                             "bbox": [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]], "score": s})
-    return coco_metrics(ds.gt_letterboxed(), dets, num_classes, cats)
-
-
-def coco_metrics(gt_items, dets, num_classes, cats=None):
-    """gt_items: (image_id, xyxy boxes, labels); dets: COCO result dicts (xywh), same pixel frame."""
-    gt = {"images": [], "annotations": [], "categories": [{"id": c} for c in range(num_classes)]}
-    for img_id, boxes, labels in gt_items:
-        gt["images"].append({"id": img_id})
-        for b, l in zip(boxes, labels):
-            w, h = b[2] - b[0], b[3] - b[1]
-            gt["annotations"].append({"id": len(gt["annotations"]) + 1, "image_id": img_id,
-                                      "category_id": l, "bbox": [b[0], b[1], w, h], "area": w * h,
-                                      "iscrowd": 0})
-    if not dets:
-        return {"AP": 0.0}
-    with contextlib.redirect_stdout(io.StringIO()):
-        cg = COCO()
-        cg.dataset = gt
-        cg.createIndex()
-        e = COCOeval(cg, cg.loadRes(dets), "bbox")
-        if cats is not None:
-            e.params.catIds = list(cats)
-        e.evaluate()
-        e.accumulate()
-        e.summarize()
-    s = e.stats
-    return {"AP": s[0] * 100, "AP50": s[1] * 100, "AP75": s[2] * 100, "AP_small": s[3] * 100,
-            "AP_medium": s[4] * 100, "AP_large": s[5] * 100}
-
-
-def param_groups(model, wd):
-    decay, no_decay = [], []
-    for n, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        (no_decay if p.ndim <= 1 or n.endswith(".bias") else decay).append(p)
-    return [{"params": decay, "weight_decay": wd}, {"params": no_decay, "weight_decay": 0.0}]
+from ..config import parse_with_config
+from ..data.coco import (ALL, RAILSAFE, RAILSAFE_FROM_COCO, SURVEILLANCE, CocoDetection,
+                         MosaicDetection, SyntheticDetection, collate)
+from ..data.yolo import WithClassMask, YoloDetection
+from ..engine import ModelEMA, load_init, param_groups, prep, to_targets
+from ..evaluation import evaluate
+from ..models.criterion import HungarianMatcher, SetCriterion
+from ..models.sarbon_det import build
+from ..paths import RUNS
 
 
 def main():
@@ -196,8 +68,8 @@ def main():
     ap.add_argument("--eval-every", type=int, default=4)
     ap.add_argument("--resume", action="store_true", help="continue from <out>/ckpt.pt if present")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--out", default="runs/sarbon")
-    args = ap.parse_args()
+    ap.add_argument("--out", default=str(RUNS / "sarbon"))
+    args = parse_with_config(ap)
     torch.manual_seed(0)
     device = torch.device(args.device)
     torch.backends.cudnn.benchmark = True
@@ -315,7 +187,8 @@ def main():
             m["epoch"] = ep + 1
             log.append(m)
             print("eval", json.dumps(m), flush=True)
-            (out_dir / "metrics.json").write_text(json.dumps({"args": vars(args), "evals": log}, indent=1))
+            (out_dir / "metrics.json").write_text(json.dumps({"args": vars(args), "evals": log}, indent=1,
+                                                             default=str))
             torch.save(ema.ema.state_dict(), out_dir / "last.pt")
             score = m.get("own_AP", m["AP"])
             if score > best:

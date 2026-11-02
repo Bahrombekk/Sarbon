@@ -1,28 +1,27 @@
 """Sarbon vs YOLO on our own labelled val set: same images, same COCO evaluator, same GPU.
 
-  .venv\\Scripts\\python.exe bench\\compare_own.py --sarbon runs\\railsafe\\s_railsafe\\best.pt \\
+  sarbon-compare --sarbon runs\\railsafe\\s_railsafe\\best.pt \\
       --yolo-json runs\\yolo\\yolo11s_val.json --yolo-speed runs\\yolo\\yolo11s_speed.json
 
-YOLO detections come from scripts/yolo_own.py (run in the Ultralytics env) as normalised
+YOLO detections come from tools/yolo_own.py (run in the Ultralytics env) as normalised
 xyxy boxes; they are mapped into the same letterboxed frame as the ground truth, so both
 models are scored by the identical pycocotools call. Speed is network-only, batch 1,
 fp16/bf16 at the same input size (dense Sarbon; the block-sparse video gain is extra).
 """
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
-from sarbon.data.coco import collate  # noqa: E402
-from sarbon.data.yolo import YoloDetection, imread_at_least  # noqa: E402
-from sarbon.models.sarbon_det import build  # noqa: E402
-from train_sarbon import coco_metrics, evaluate  # noqa: E402
+from ..config import parse_with_config
+from ..data.coco import collate
+from ..data.yolo import YoloDetection, imread_at_least
+from ..evaluation import coco_metrics, evaluate
+from ..models.sarbon_det import build
+from ..paths import RUNS
 
 
 def yolo_dets(ds, path, class_map):
@@ -65,8 +64,8 @@ def main():
     ap.add_argument("--yolo-json")
     ap.add_argument("--yolo-speed", help="json written by yolo_own.py speed")
     ap.add_argument("--img", type=int, default=640)
-    ap.add_argument("--out", default="runs/compare_own.json")
-    args = ap.parse_args()
+    ap.add_argument("--out", default=str(RUNS / "compare_own.json"))
+    args = parse_with_config(ap)
     cmap = {int(a): int(b) for a, b in (p.split(":") for p in args.map.split(","))}
     cats = sorted(set(cmap.values()))
     ds = YoloDetection(Path(args.split) / "val.txt", args.img, cmap, train=False)

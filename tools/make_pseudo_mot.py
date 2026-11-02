@@ -3,7 +3,7 @@
   .venv\\Scripts\\python.exe scripts\\make_pseudo_mot.py D:\\recordings --out D:\\data\\pseudo_mot
   (every video file in the folder becomes one sequence; RTSP URLs work too)
 then:
-  .venv\\Scripts\\python.exe experiments\\train_track.py --mot D:\\data\\pseudo_mot --classes 1 ...
+  sarbon-train-track --mot D:\\data\\pseudo_mot --classes 1 ...
 """
 import argparse
 import re

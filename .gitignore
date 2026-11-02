@@ -8,3 +8,10 @@ __pycache__/
 /data/
 /runs/
 /outputs/
+*.egg-info/
+/build/
+/dist/
+.pytest_cache/
+# local camera configs hold addresses and passwords
+/configs/run/*.yaml
+!/configs/run/*.example.yaml

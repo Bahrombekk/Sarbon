@@ -1,138 +1,39 @@
-"""Run Sarbon-S (detection + tracking) on live cameras or video files and show the result.
+r"""Run Sarbon (detection + tracking) on live cameras or video files and show the result.
 
-  one RTSP camera : .venv\\Scripts\\python.exe scripts\\run_camera.py rtsp://user:pass@ip:554/stream
-  RailSafe config : .venv\\Scripts\\python.exe scripts\\run_camera.py C:\\path\\gui_config.json --cams 0,1
-  video file      : .venv\\Scripts\\python.exe scripts\\run_camera.py C:\\data\\recordings\\x.mp4 --save runs\\demo.mp4
-  webcam          : .venv\\Scripts\\python.exe scripts\\run_camera.py 0
+  one RTSP camera : sarbon-run rtsp://user:pass@ip:554/stream
+  RailSafe config : sarbon-run C:\path\gui_config.json --cams 0,1
+  video file      : sarbon-run C:\data\recordings\x.mp4 --save runs\demo.mp4
+  webcam          : sarbon-run 0
+  from a file     : sarbon-run --config configs/run/camera.yaml
 
-Sources can be mixed; all of them go through the model as one batch. Live sources are read
-in background threads that keep only the newest frame (no growing RTSP delay); files are
-read frame by frame. Keys in the window: q / Esc quit, space pause.
-Camera passwords are never printed (URLs are shown as rtsp://***:***@host/...).
+Sources can be mixed; all of them go through the model as one batch. Keys in the window:
+q / Esc quit, space pause. Camera passwords are never printed.
 """
 import argparse
 import json
-import os
 import sys
-import threading
 import time
 from pathlib import Path
 
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
-import cv2  # noqa: E402
-import numpy as np  # noqa: E402
-import torch  # noqa: E402
+import cv2
+import numpy as np
+import torch
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
-from camera_probe import cameras, safe  # noqa: E402
-from sarbon.data.coco import RAILSAFE  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
-from sarbon.pipeline import SarbonVideo  # noqa: E402
-from sarbon.track import TrackerConfig  # noqa: E402
-
-DEFAULT_WEIGHTS = ROOT / "runs" / "railsafe" / "s_railsafe" / "best.pt"
-CLASS_COLORS = {"person": (60, 200, 60), "bicycle": (200, 200, 60), "motorcycle": (200, 120, 60),
-                "yengil": (255, 160, 40), "ogir": (40, 80, 255), "train": (200, 60, 200)}
-
-
-def expand_sources(items, cam_filter):
-    """-> [(name, source, live)]; a .json is a RailSafe GUI config holding RTSP cameras."""
-    out = []
-    for s in items:
-        if s.lower().endswith(".json"):
-            cams = cameras(s)
-            if cam_filter is not None:
-                cams = [cams[i] for i in cam_filter]
-            out += [(n, u, True) for n, u in cams]
-        elif s.isdigit():
-            out.append((f"webcam{s}", int(s), True))
-        elif "://" in s:
-            out.append((safe(s).split("@")[-1][:32], s, True))
-        else:
-            out.append((Path(s).stem[:32], s, False))
-    return out
-
-
-class Source:
-    """One camera or file. Live sources: a thread keeps only the newest frame."""
-
-    def __init__(self, name, src, live):
-        self.name, self.src, self.live = name, src, live
-        api = cv2.CAP_FFMPEG if isinstance(src, str) else cv2.CAP_ANY
-        self.cap = cv2.VideoCapture(src, api)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"cannot open {name} ({safe(src) if isinstance(src, str) else src})")
-        self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
-        self.frame, self.ended, self.lock = None, False, threading.Lock()
-        if live:
-            threading.Thread(target=self._reader, daemon=True).start()
-
-    def _reader(self):
-        fails = 0
-        while not self.ended:
-            ok, f = self.cap.read()
-            if not ok:
-                fails += 1
-                if fails > 50:  # camera dropped: reconnect
-                    self.cap.release()
-                    time.sleep(2)
-                    self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
-                    fails = 0
-                continue
-            fails = 0
-            with self.lock:
-                self.frame = f
-
-    def read(self):
-        if not self.live:
-            ok, f = self.cap.read()
-            if not ok:
-                self.ended = True
-                return None
-            return f
-        with self.lock:
-            return self.frame
-
-    def close(self):
-        self.ended = True
-        self.cap.release()
-
-
-def draw(frame, tracks, name, info):
-    for t in tracks:
-        x0, y0, x1, y1 = map(int, t["box"])
-        label = t["label"] if isinstance(t["label"], str) else str(t["label"])
-        c = CLASS_COLORS.get(label, (200, 200, 200))
-        cv2.rectangle(frame, (x0, y0), (x1, y1), c, 2)
-        txt = f"{label} #{t['id']} {t['score']:.2f}"
-        (tw, th), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(frame, (x0, max(0, y0 - th - 6)), (x0 + tw + 4, y0), c, -1)
-        cv2.putText(frame, txt, (x0 + 2, y0 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"{name}  {info}", (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, f"{name}  {info}", (10, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1, cv2.LINE_AA)
-    return frame
-
-
-def tile(frames):
-    n = len(frames)
-    cols = int(np.ceil(np.sqrt(n)))
-    rows = int(np.ceil(n / cols))
-    h, w = frames[0].shape[:2]
-    grid = np.zeros((rows * h, cols * w, 3), np.uint8)
-    for i, f in enumerate(frames):
-        r, c = divmod(i, cols)
-        grid[r * h:(r + 1) * h, c * w:(c + 1) * w] = f
-    return grid
+from ..config import parse_with_config
+from ..data.coco import RAILSAFE
+from ..inference.sources import Source, expand_sources
+from ..inference.video import SarbonVideo
+from ..inference.visualize import draw, tile
+from ..models.sarbon_det import build, load_weights
+from ..paths import DEFAULT_DETECTOR
+from ..track import TrackerConfig
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("sources", nargs="+", help="rtsp URL, video file, webcam index or RailSafe gui_config.json")
+    ap.add_argument("sources", nargs="*", help="rtsp URL, video file, webcam index or RailSafe gui_config.json")
     ap.add_argument("--cams", help="with a .json config: comma-separated camera indexes to use")
-    ap.add_argument("--weights", default=str(DEFAULT_WEIGHTS))
+    ap.add_argument("--weights", default=str(DEFAULT_DETECTOR))
     ap.add_argument("--size", default="640x1152", help="model input HxW, multiples of 32 "
                     "(384x640 faster, 640x1152 sees small/far objects better)")
     ap.add_argument("--view", type=int, default=1280, help="width each camera is processed and shown at")
@@ -144,7 +45,9 @@ def main():
     ap.add_argument("--log", help="write tracks per frame to this .jsonl")
     ap.add_argument("--no-show", action="store_true")
     ap.add_argument("--max-frames", type=int, default=0)
-    args = ap.parse_args()
+    args = parse_with_config(ap)
+    if not args.sources:
+        ap.error("give at least one source (or sources: [...] in --config)")
 
     cam_filter = [int(i) for i in args.cams.split(",")] if args.cams else None
     srcs = []

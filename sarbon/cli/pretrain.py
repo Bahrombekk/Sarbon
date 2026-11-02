@@ -6,14 +6,14 @@ teacher on our own commercially licensed images: the student's stride-16 feature
 projected to the teacher's dimension and pulled towards the teacher's patch tokens with
 a cosine loss (RT-DETRv4, 2510.25257, found cosine better than MSE). No labels needed.
 
-  .venv\\Scripts\\python.exe experiments\\pretrain_distill.py --coco C:\\data\\coco --epochs 20
-  then: train_sarbon.py ... --init runs\\pretrain\\s_distill.pt
+  sarbon-pretrain --coco C:\\data\\coco --epochs 20
+  then: sarbon-train ... --init runs\\pretrain\\s_distill.pt
 CPU smoke test (random stand-in teacher, nothing downloaded):
-  .venv\\Scripts\\python.exe experiments\\pretrain_distill.py --fake-teacher --synthetic --device cpu --size n --epochs 2
+  sarbon-pretrain --fake-teacher --synthetic --device cpu --size n --epochs 2
 """
 import argparse
 import math
-import sys
+
 import time
 from pathlib import Path
 
@@ -22,10 +22,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sarbon.data.coco import ALL, CocoDetection, MosaicDetection, SyntheticDetection, collate  # noqa: E402
-from sarbon.models.sarbon_det import build  # noqa: E402
-from train_sarbon import param_groups, prep  # noqa: E402
+from ..data.coco import ALL, CocoDetection, MosaicDetection, SyntheticDetection, collate
+from ..config import parse_with_config
+from ..engine import param_groups, prep
+from ..models.sarbon_det import build
+from ..paths import RUNS
 
 
 class FakeTeacher(nn.Module):
@@ -80,9 +81,9 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--out", default="runs/pretrain")
+    ap.add_argument("--out", default=str(RUNS / "pretrain"))
     ap.add_argument("--limit", type=int, default=None, help="use only N images (smoke tests)")
-    args = ap.parse_args()
+    args = parse_with_config(ap)
     torch.manual_seed(0)
     device = torch.device(args.device)
     if args.synthetic:

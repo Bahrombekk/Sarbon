@@ -1,14 +1,11 @@
 """Probe / record RTSP cameras listed in a RailSafe GUI config. Credentials never printed.
 
-  probe : .venv\\Scripts\\python.exe scripts\\camera_probe.py probe <gui_config.json> --snap <dir>
-  record: .venv\\Scripts\\python.exe scripts\\camera_probe.py record <gui_config.json> --out <dir> --minutes 15
+  probe : .venv\\Scripts\\python.exe tools\\camera_probe.py probe <gui_config.json> --snap <dir>
+  record: .venv\\Scripts\\python.exe tools\\camera_probe.py record <gui_config.json> --out <dir> --minutes 15
 Recording copies the camera's own H.264/H.265 stream (no re-encode) when ffmpeg is
 available, else re-encodes frames with OpenCV at --width.
 """
 import argparse
-import json
-import os
-import re
 import shutil
 import subprocess
 import sys
@@ -16,25 +13,9 @@ import threading
 import time
 from pathlib import Path
 
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from sarbon.inference.sources import cameras, safe  # noqa: E402  (also sets the FFmpeg RTSP options)
 import cv2  # noqa: E402
-
-
-def cameras(cfg_path):
-    cfg = json.load(open(cfg_path, encoding="utf-8"))
-    out = []
-    for ci, c in enumerate(cfg.get("crossings", [])):
-        for k, cam in enumerate(c.get("cameras", [])):
-            src = cam.get("source", "")
-            if src.lower().startswith("rtsp://"):
-                name = f"x{ci}_{re.sub(r'[^A-Za-z0-9]+', '_', str(c.get('name', ci)))[:20]}_c{k}"
-                out.append((name, src))
-    return out
-
-
-def safe(url):
-    return re.sub(r"//[^@/]+@", "//***:***@", url)
 
 
 def probe(cfg_path, snap_dir):

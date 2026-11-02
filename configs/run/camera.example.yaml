@@ -1,0 +1,13 @@
+# Copy to camera.yaml (git-ignored: it holds camera addresses) and edit. Usage:
+#   sarbon-run --config configs/run/camera.yaml
+sources:
+  - rtsp://USER:PASSWORD@192.168.1.10:554/stream1
+  # - C:/data/recordings/x0_Pereezd_8_c0_20261029_115707.mp4
+  # - C:/path/to/gui_config.json   # all RTSP cameras of a RailSafe config (pick with cams: "0,1")
+# weights: weights/sarbon-s-railsafe.pt
+size: 640x1152      # model input HxW; 384x640 is faster
+conf: 0.3
+view: 1280
+sparse: false
+# save: runs/demo.mp4
+# log: runs/tracks.jsonl

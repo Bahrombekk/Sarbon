@@ -7,7 +7,6 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
 from sarbon.data.yolo import WithClassMask, YoloDetection, label_path, read_labels  # noqa: E402
 from sarbon.models.criterion import SetCriterion, mal_loss, sigmoid_focal  # noqa: E402
 from sarbon.models.sarbon_det import build  # noqa: E402
@@ -73,7 +72,7 @@ def test_yolo_dataset_letterbox_and_mask(tmp_path):
 
 
 def test_init_remaps_class_rows(tmp_path):
-    from train_sarbon import load_init
+    from sarbon.engine import load_init
     src = build("n", 6)
     path = tmp_path / "src.pt"
     torch.save(src.state_dict(), path)

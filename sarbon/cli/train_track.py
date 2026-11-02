@@ -5,23 +5,24 @@ queries matched to ground truth, gathered over all frames of the batch, get a su
 contrastive loss (same person in other frames = positive). Evaluated by cross-frame
 retrieval: does each object's nearest neighbour in the other frame have its identity?
 
-  .venv\\Scripts\\python.exe experiments\\train_track.py --mot D:\\data\\mot_like --ckpt runs\\sarbon\\s\\best.pt
+  sarbon-train-track --mot D:\\data\\mot_like --ckpt runs\\sarbon\\s\\best.pt
 CPU smoke test:
-  .venv\\Scripts\\python.exe experiments\\train_track.py --synthetic --device cpu --size n --epochs 3
+  sarbon-train-track --synthetic --device cpu --size n --epochs 3
 """
 import argparse
-import sys
+
 import time
 from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sarbon.data.mot import MOTClips, SyntheticClips, collate_clips  # noqa: E402
-from sarbon.models.criterion import SetCriterion, id_contrastive  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
-from train_sarbon import param_groups, prep, to_targets  # noqa: E402
+from ..data.mot import MOTClips, SyntheticClips, collate_clips
+from ..config import parse_with_config
+from ..engine import param_groups, prep, to_targets
+from ..models.criterion import SetCriterion, id_contrastive
+from ..models.sarbon_det import build, load_weights
+from ..paths import RUNS
 
 
 def clip_step(model, crit, clip, size, device):
@@ -66,8 +67,8 @@ def main():
     ap.add_argument("--freeze-stem", action="store_true")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--out", default="runs/track")
-    args = ap.parse_args()
+    ap.add_argument("--out", default=str(RUNS / "track"))
+    args = parse_with_config(ap)
     torch.manual_seed(0)
     device = torch.device(args.device)
     if args.synthetic:

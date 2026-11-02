@@ -15,20 +15,18 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "experiments"))
+sys.path.insert(0, str(ROOT / "tools"))
 from make_yolo_split import sequence  # noqa: E402
 from sarbon.data.coco import RAILSAFE  # noqa: E402
 from sarbon.data.yolo import YoloDetection, label_path  # noqa: E402
 from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
+from sarbon.engine import prep  # noqa: E402
 from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
-from train_sarbon import prep  # noqa: E402
 
 OWN_TO_RAILSAFE = {0: RAILSAFE.index("yengil"), 1: RAILSAFE.index("ogir")}
 

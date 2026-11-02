@@ -7,7 +7,7 @@ the product. Same split as Sarbon (make_yolo_split.py lists), same input size.
   dump  : <ultralytics python> scripts\\yolo_own.py dump  --weights <best.pt> --split C:\\data\\pereezd_split --json <out.json>
   speed : <ultralytics python> scripts\\yolo_own.py speed --weights <best.pt>
 `dump` writes raw detections (normalised xyxy, score, class) for every val image, so
-bench/compare_own.py scores YOLO and Sarbon with the very same COCO evaluator.
+sarbon-compare (sarbon/cli/compare.py) scores YOLO and Sarbon with the very same COCO evaluator.
 """
 import argparse
 import json
