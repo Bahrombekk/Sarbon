@@ -1,4 +1,4 @@
-"""Train the Sarbon detector.
+﻿"""Train the Sarbon detector.
 
 Three modes:
   commercial (default): surveillance classes, commercial-license COCO images only -> product weights
@@ -65,8 +65,11 @@ def main():
     ap.add_argument("--taxonomy", default="surveillance", choices=["surveillance", "railsafe"])
     ap.add_argument("--yolo", help="folder with train.txt / val.txt (make_yolo_split.py) of own labelled data")
     ap.add_argument("--yolo-map", default="0:3,1:4", help="YOLO class -> our label (railsafe: yengil, ogir)")
+    ap.add_argument("--own", action="append", default=[], metavar="SPLIT=MAP",
+                    help="more own labelled data: split folder (train.txt/val.txt) = class map, "
+                         "e.g. C:/data/smart_split=0:0 (repeatable; YAML: a list)")
     ap.add_argument("--eval-every", type=int, default=4)
-    ap.add_argument("--resume", action="store_true", help="continue from <out>/ckpt.pt if present")
+    ap.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False, help="continue from <out>/ckpt.pt if present")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=str(RUNS / "sarbon"))
     args = parse_with_config(ap)
@@ -74,7 +77,7 @@ def main():
     device = torch.device(args.device)
     torch.backends.cudnn.benchmark = True
 
-    names, yolo_val = None, None
+    names, own_vals = None, []
     if args.synthetic:
         size = 256
         base, val_ds = SyntheticDetection(64, size), SyntheticDetection(16, size, seed=1000)
@@ -96,16 +99,22 @@ def main():
         num_classes = base.num_classes
         mosaics = [MosaicDetection(base, prob=0.5)]
         train_ds = mosaics[0]
-        if args.yolo:
-            # own labelled data: annotates only the mapped classes (partial labels)
-            ymap = {int(a): int(b) for a, b in (p.split(":") for p in args.yolo_map.split(","))}
-            ytrain = YoloDetection(Path(args.yolo) / "train.txt", size, ymap, limit=args.limit)
-            yolo_val = YoloDetection(Path(args.yolo) / "val.txt", size, ymap, train=False, limit=args.limit)
+        # own labelled data sets: each annotates only its mapped classes (partial labels)
+        sources = ([("own", args.yolo, args.yolo_map)] if args.yolo else []) + [
+            (Path(s.split("=", 1)[0]).name.removesuffix("_split"), *s.split("=", 1)) for s in args.own]
+        parts = [WithClassMask(mosaics[0], num_classes, range(num_classes))]
+        for name, split, cmap in sources:
+            ymap = {int(a): int(b) for a, b in (p.split(":") for p in cmap.split(","))}
+            ytrain = YoloDetection(Path(split) / "train.txt", size, ymap, limit=args.limit)
+            yval = YoloDetection(Path(split) / "val.txt", size, ymap, train=False, limit=args.limit)
             mosaics.append(MosaicDetection(ytrain, prob=0.5))
             # mosaic stays within one source, so every sample has a single annotation mask
-            train_ds = ConcatDataset([WithClassMask(mosaics[0], num_classes, range(num_classes)),
-                                      WithClassMask(mosaics[1], num_classes, sorted(set(ymap.values())))])
-            print(f"own data {args.yolo}: train {len(ytrain)}, val {len(yolo_val)}, classes {sorted(set(ymap.values()))}")
+            parts.append(WithClassMask(mosaics[-1], num_classes, sorted(set(ymap.values()))))
+            own_vals.append((name, yval))
+            print(f"own data {name} ({split}): train {len(ytrain)}, val {len(yval)}, "
+                  f"classes {sorted(set(ymap.values()))}")
+        if sources:
+            train_ds = ConcatDataset(parts)
     print(f"train {len(train_ds)} images, val {len(val_ds)}, classes {num_classes}, "
           f"{'benchmark (research only)' if args.benchmark else 'commercial'}")
     # persistent workers: on Windows every respawn re-imports torch (~1 min) and repeated
@@ -116,8 +125,8 @@ def main():
     train_dl = mk()
     val_dl = DataLoader(val_ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
                         persistent_workers=args.workers > 0)
-    yolo_dl = yolo_val and DataLoader(yolo_val, args.batch, num_workers=min(4, args.workers),
-                                      collate_fn=collate, persistent_workers=args.workers > 0)
+    own_dls = [(name, ds, DataLoader(ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
+                                     persistent_workers=args.workers > 0)) for name, ds in own_vals]
 
     arch = {}
     if args.widths:
@@ -179,18 +188,19 @@ def main():
                       + f" lr {sched.get_last_lr()[0]:.2e} {time.time() - t0:.0f}s", flush=True)
         if (ep + 1) % args.eval_every == 0 or ep == args.epochs - 1:
             m = evaluate(ema.ema, val_ds, val_dl, device, num_classes, size)
-            if yolo_val is not None:
+            for name, ds, dl in own_dls:
                 # own data is scored on the classes it annotates; it also picks the best checkpoint
-                cats = sorted(set(yolo_val.class_map.values()))
-                m.update({f"own_{k}": v for k, v in
-                          evaluate(ema.ema, yolo_val, yolo_dl, device, num_classes, size, cats).items()})
+                cats = sorted(set(ds.class_map.values()))
+                m.update({f"{name}_{k}": v for k, v in
+                          evaluate(ema.ema, ds, dl, device, num_classes, size, cats).items()})
             m["epoch"] = ep + 1
             log.append(m)
             print("eval", json.dumps(m), flush=True)
             (out_dir / "metrics.json").write_text(json.dumps({"args": vars(args), "evals": log}, indent=1,
                                                              default=str))
             torch.save(ema.ema.state_dict(), out_dir / "last.pt")
-            score = m.get("own_AP", m["AP"])
+            # best checkpoint: mean AP over the own data sets (the target domain), else COCO AP
+            score = sum(m[f"{n}_AP"] for n, _, _ in own_dls) / len(own_dls) if own_dls else m["AP"]
             if score > best:
                 best = score
                 torch.save(ema.ema.state_dict(), out_dir / "best.pt")
