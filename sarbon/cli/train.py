@@ -29,7 +29,7 @@ from ..config import parse_with_config
 from ..data.coco import (ALL, RAILSAFE, RAILSAFE_FROM_COCO, SURVEILLANCE, CocoDetection,
                          MosaicDetection, SyntheticDetection, collate)
 from ..data.yolo import WithClassMask, YoloDetection
-from ..engine import ModelEMA, load_init, param_groups, prep, to_targets
+from ..engine import ModelEMA, add_arch_args, arch_overrides, load_init, param_groups, prep, to_targets
 from ..evaluation import evaluate
 from ..models.criterion import HungarianMatcher, SetCriterion
 from ..models.sarbon_det import build
@@ -55,9 +55,7 @@ def main():
     ap.add_argument("--fusion", default="concat", choices=["concat", "weighted", "gated"])
     ap.add_argument("--block", default="res", choices=["res", "rep", "dw"])
     ap.add_argument("--act", default="relu", choices=["relu", "silu", "gelu"])
-    ap.add_argument("--widths", help="stem widths at stride 2/4/8, e.g. 48,96,192 (backbone ablation)")
-    ap.add_argument("--depths", help="Res blocks at stride 4/8, e.g. 2,3")
-    ap.add_argument("--c16", type=int, help="channels of the stride-16 stage")
+    add_arch_args(ap)
     ap.add_argument("--tag", default="", help="suffix for the output folder (ablations)")
     ap.add_argument("--init", help="pretrained weights: distillation output or a detector checkpoint")
     ap.add_argument("--init-classes", choices=["surveillance"],
@@ -128,13 +126,7 @@ def main():
     own_dls = [(name, ds, DataLoader(ds, args.batch, num_workers=min(4, args.workers), collate_fn=collate,
                                      persistent_workers=args.workers > 0)) for name, ds in own_vals]
 
-    arch = {}
-    if args.widths:
-        arch["widths"] = tuple(int(v) for v in args.widths.split(","))
-    if args.depths:
-        arch["depths"] = tuple(int(v) for v in args.depths.split(","))
-    if args.c16:
-        arch["c16"] = args.c16
+    arch = arch_overrides(args)
     model = build(args.size, num_classes, halo_zero=not args.no_halo_zero, fusion=args.fusion,
                   block_type=args.block, act=args.act, **arch).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")

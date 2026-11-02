@@ -21,7 +21,7 @@ import torch
 from ..data.coco import RAILSAFE
 from ..engine.training import MEAN, STD
 from ..models.box_ops import cxcywh_to_xyxy
-from ..models.sarbon_det import build, load_weights
+from ..models.sarbon_det import load_detector
 from ..paths import DEFAULT_DETECTOR
 
 
@@ -87,7 +87,7 @@ def main(argv=None):
     ap.add_argument("--no-check", action="store_true", help="skip the ONNX Runtime comparison (fp32 only)")
     args = parse_with_config(ap, argv)
 
-    det = load_weights(build(args.size, args.classes, halo_zero=False), args.weights).eval()
+    det = load_detector(args.weights, args.size, args.classes, halo_zero=False).eval()
     model = Deploy(det, args.img).eval()
     if args.half:
         model = model.cuda().half()

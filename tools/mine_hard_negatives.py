@@ -39,7 +39,7 @@ from sarbon.data.coco import RAILSAFE  # noqa: E402
 from sarbon.data.yolo import YoloDetection, imread_at_least, label_path  # noqa: E402
 from sarbon.engine import prep  # noqa: E402
 from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
+from sarbon.models.sarbon_det import load_detector  # noqa: E402
 from sarbon.paths import DEFAULT_DETECTOR  # noqa: E402
 
 FIELDS = ["id", "image", "class", "score", "x0", "y0", "x1", "y1", "verdict"]
@@ -90,7 +90,7 @@ def mine(args):
     ds = YoloDetection(Path(args.split) / f"{args.part}.txt", args.img, cmap, train=False, limit=args.limit)
     allowed = torch.tensor(sorted(set(cmap.values())))  # judge only the classes this data labels
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_weights(build(args.size, len(RAILSAFE), halo_zero=False), args.weights).to(dev).eval()
+    model = load_detector(args.weights, args.size, len(RAILSAFE), halo_zero=False).to(dev).eval()
     cands = []
     for start in range(0, len(ds), args.batch):
         items = [ds.load(i) for i in range(start, min(start + args.batch, len(ds)))]

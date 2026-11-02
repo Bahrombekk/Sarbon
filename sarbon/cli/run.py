@@ -24,7 +24,7 @@ from ..data.coco import RAILSAFE
 from ..inference.sources import Source, expand_sources
 from ..inference.video import SarbonVideo
 from ..inference.visualize import draw, tile
-from ..models.sarbon_det import build, load_weights
+from ..models.sarbon_det import load_detector
 from ..paths import DEFAULT_DETECTOR
 from ..track import TrackerConfig
 
@@ -63,7 +63,7 @@ def main():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     h, w = (int(v) for v in args.size.lower().split("x"))
-    det = load_weights(build("s", len(RAILSAFE), halo_zero=False), args.weights)
+    det = load_detector(args.weights, "s", len(RAILSAFE), halo_zero=False)
     cfg = TrackerConfig(high=args.conf, new=args.conf, emb=True, color=0.7, reid=True, ground=True)
     video = SarbonVideo(det, len(srcs), size=(h, w), tracker_cfg=cfg, class_names=RAILSAFE, device=dev,
                         tau=args.tau if args.sparse else 0.0, graph=not args.no_graph)

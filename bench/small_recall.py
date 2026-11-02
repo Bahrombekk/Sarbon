@@ -25,7 +25,7 @@ from sarbon.cli.compare import yolo_dets  # noqa: E402
 from sarbon.data.yolo import YoloDetection  # noqa: E402
 from sarbon.engine import prep  # noqa: E402
 from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
+from sarbon.models.sarbon_det import load_detector  # noqa: E402
 
 BINS = [(0, 16), (16, 32), (32, 96), (96, 1e9)]  # sqrt(area) in letterbox pixels
 
@@ -68,7 +68,7 @@ def main():
     args = ap.parse_args()
     cmap = {0: 3, 1: 4}
     ds = YoloDetection(Path(args.split) / "val.txt", args.img, cmap, train=False)
-    model = load_weights(build("s", 6, halo_zero=False), args.sarbon).cuda().eval()
+    model = load_detector(args.sarbon, "s", 6, halo_zero=False).cuda().eval()
     dl = DataLoader(ds, 16, num_workers=4, collate_fn=collate)
     gts = {i: b for i, b, _ in ds.gt_letterboxed()}
     r = Recall()

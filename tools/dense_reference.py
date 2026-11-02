@@ -23,7 +23,7 @@ import torch
 
 from sarbon.data.coco import RAILSAFE
 from sarbon.models.box_ops import cxcywh_to_xyxy
-from sarbon.models.sarbon_det import build, load_weights
+from sarbon.models.sarbon_det import load_detector
 from sarbon.paths import DEFAULT_DETECTOR
 
 MEAN = torch.tensor([0.485, 0.456, 0.406]) * 255
@@ -113,7 +113,7 @@ def main():
     args = ap.parse_args()
     h, w = (int(v) for v in args.size.lower().split("x"))
     Path(args.out).mkdir(parents=True, exist_ok=True)
-    det = load_weights(build("s", len(RAILSAFE), halo_zero=False), args.weights).cuda().eval()
+    det = load_detector(args.weights, "s", len(RAILSAFE), halo_zero=False).cuda().eval()
     gd = GraphedDetector(det, args.batch, h, w)
     videos = [Path(p) for v in args.videos for p in sorted(glob.glob(v))]
     report = [process(v, gd, args, h, w) for v in videos]

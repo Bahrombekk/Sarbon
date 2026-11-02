@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 
 from ..data.coco import ALL, CocoDetection, MosaicDetection, SyntheticDetection, collate
 from ..config import parse_with_config
-from ..engine import param_groups, prep
+from ..engine import add_arch_args, arch_overrides, param_groups, prep
 from ..models.sarbon_det import build
 from ..paths import RUNS
 
@@ -83,6 +83,8 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=str(RUNS / "pretrain"))
     ap.add_argument("--limit", type=int, default=None, help="use only N images (smoke tests)")
+    ap.add_argument("--tag", default="", help="output name suffix: <size><tag>_distill.pt")
+    add_arch_args(ap)
     args = parse_with_config(ap)
     torch.manual_seed(0)
     device = torch.device(args.device)
@@ -102,7 +104,7 @@ def main():
     for p in teacher.parameters():
         p.requires_grad_(False)
 
-    det = build(args.size, 6, halo_zero=False)
+    det = build(args.size, 6, halo_zero=False, **arch_overrides(args))
     student = Student(det, teacher.embed_dim).to(device)
     opt = torch.optim.AdamW(param_groups(student, 0.05), args.lr)
     steps = args.epochs * len(dl)
@@ -132,7 +134,7 @@ def main():
         print(f"ep {ep}: mean cos-loss {tot / max(1, n):.4f}", flush=True)
         # save only detector weights the detector understands (stem + core)
         sd = {k: v for k, v in det.state_dict().items() if k.startswith(("stem.", "core."))}
-        torch.save(sd, out_dir / f"{args.size}_distill.pt")
+        torch.save(sd, out_dir / f"{args.size}{args.tag}_distill.pt")
 
 
 if __name__ == "__main__":

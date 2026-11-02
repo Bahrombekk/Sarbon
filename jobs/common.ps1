@@ -12,6 +12,7 @@ function GpuBusy {
         $c = $_.CommandLine
         $c -and $c -notlike "*multiprocessing*" -and (
             $c -like "*train_sarbon.py*" -or $c -like "*sarbon.cli.train*" -or $c -like "*sarbon-train*" -or
+            $c -like "*sarbon.cli.pretrain*" -or
             $c -like "*Collector*train.py*") })
 }
 

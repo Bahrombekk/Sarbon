@@ -379,3 +379,19 @@ def load_weights(model, path):
     if bad:
         raise RuntimeError(f"checkpoint mismatch: {bad[:5]}")
     return model
+
+
+def arch_from_state_dict(sd):
+    """Backbone overrides (widths, depths, c16) read back from a checkpoint's tensor shapes."""
+    def blocks(prefix):
+        return len({k.split(".")[2] for k in sd if k.startswith(prefix)})
+
+    return {"widths": (sd["stem.stem.0.0.weight"].shape[0], sd["stem.stem.1.0.weight"].shape[0],
+                       sd["stem.s8.0.body.0.0.weight"].shape[0]),
+            "depths": (blocks("stem.s4."), blocks("stem.s8.")), "c16": sd["core.to16.0.0.weight"].shape[0]}
+
+
+def load_detector(path, size="s", num_classes=6, **overrides):
+    """Build the detector a checkpoint was trained as (backbone read from its shapes) and load it."""
+    arch = arch_from_state_dict(torch.load(path, map_location="cpu"))
+    return load_weights(build(size, num_classes, **{**arch, **overrides}), path)

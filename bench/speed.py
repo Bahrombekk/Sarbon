@@ -23,7 +23,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sarbon.cli.export import Deploy, export  # noqa: E402
 from sarbon.data.coco import RAILSAFE  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
+from sarbon.models.sarbon_det import build, load_detector  # noqa: E402
 
 
 def gpu_util():
@@ -121,9 +121,8 @@ def main():
     for b in args.batch:
         x = torch.rand(b, 3, args.img, args.img, device="cuda") * 255
         for name in MODES:
-            det = build(args.size, len(RAILSAFE), halo_zero=False)
-            if args.weights:
-                det = load_weights(det, args.weights)
+            det = (load_detector(args.weights, args.size, len(RAILSAFE), halo_zero=False) if args.weights
+                   else build(args.size, len(RAILSAFE), halo_zero=False))
             model = Deploy(det, args.img).cuda().eval()
             try:
                 with torch.no_grad():

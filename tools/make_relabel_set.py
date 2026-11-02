@@ -26,7 +26,7 @@ from sarbon.data.coco import RAILSAFE  # noqa: E402
 from sarbon.data.yolo import YoloDetection, label_path  # noqa: E402
 from sarbon.models.box_ops import cxcywh_to_xyxy  # noqa: E402
 from sarbon.engine import prep  # noqa: E402
-from sarbon.models.sarbon_det import build, load_weights  # noqa: E402
+from sarbon.models.sarbon_det import load_detector  # noqa: E402
 
 OWN_TO_RAILSAFE = {0: RAILSAFE.index("yengil"), 1: RAILSAFE.index("ogir")}
 
@@ -73,7 +73,7 @@ def main():
     (out / "images").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(exist_ok=True)
 
-    model = load_weights(build("s", len(RAILSAFE), halo_zero=False), args.weights).cuda().eval()
+    model = load_detector(args.weights, "s", len(RAILSAFE), halo_zero=False).cuda().eval()
     stats = {"frames": 0, "human_boxes": 0, "prelabels": defaultdict(int)}
     for i in chosen:
         img, gt, labels, (_, s, px, py) = ds.load(i)

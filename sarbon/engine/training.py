@@ -79,3 +79,21 @@ def param_groups(model, wd):
             continue
         (no_decay if p.ndim <= 1 or n.endswith(".bias") else decay).append(p)
     return [{"params": decay, "weight_decay": wd}, {"params": no_decay, "weight_decay": 0.0}]
+
+
+def add_arch_args(ap):
+    """Backbone overrides shared by the training CLIs (default: the size preset)."""
+    ap.add_argument("--widths", help="stem widths at stride 2/4/8, e.g. 48,96,192")
+    ap.add_argument("--depths", help="Res blocks at stride 4/8, e.g. 2,3")
+    ap.add_argument("--c16", type=int, help="channels of the stride-16 stage")
+
+
+def arch_overrides(args):
+    out = {}
+    if args.widths:
+        out["widths"] = tuple(int(v) for v in str(args.widths).split(","))
+    if args.depths:
+        out["depths"] = tuple(int(v) for v in str(args.depths).split(","))
+    if args.c16:
+        out["c16"] = args.c16
+    return out
