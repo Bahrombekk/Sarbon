@@ -1,5 +1,5 @@
 """(tools/openimages) Pick Open Images V7 validation images for a yengil/og'ir vehicle test (read-only on the CSVs)."""
-import csv, json, random, sys
+import csv, json, random
 from collections import defaultdict
 M = r"C:\data\openimages_val\meta"
 CAR, BUS, TRUCK = "/m/0k4j", "/m/01bjv", "/m/07r04"

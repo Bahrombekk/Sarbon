@@ -2,7 +2,7 @@
 
 Open Images protocol: a class is scored only on the images where it was verified (present or
 absent), so unverified objects are neither misses nor false positives."""
-import json, os, sys
+import json, sys
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
