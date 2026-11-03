@@ -1,0 +1,29 @@
+# Pereezd detector trained like the RailSafe YOLO26n (models/pereezd_yolo26n.pt), so the two can be
+# compared on equal terms: the same images (pereezd_dataset's own train/ and val/ folders, original
+# labels), the same input size 1088 and batch 8. Starts from the general base with own people
+# (coco_wide_person.yaml); COCO stays in the mix for the classes the crossing labels do not annotate
+# (person, bicycle, motorcycle, train).
+# Not a held-out test: the val frames have neighbours 0.2 s away in train, for both models alike.
+# 30 epochs of ~25k samples ~ the 100 x 7.6k samples YOLO saw; RailSafe fine-tunes so far peaked early.
+#   C:/data/pereezd_yolo_split: train 7648, val 765 (build.json)
+coco: C:/data/coco
+taxonomy: railsafe
+yolo: C:/data/pereezd_yolo_split
+yolo_map: "0:3,1:4"
+init: runs/sarbon/s_wide_person/best.pt
+init_classes: surveillance
+size: s
+widths: "48,96,192"
+depths: "2,3"
+c16: 384
+img: 1088
+epochs: 30
+no_aug_epochs: 2
+lr: 1.4e-4
+batch: 8
+workers: 12
+no_halo_zero: true
+eval_every: 2
+tag: _railsafe_full_1088
+out: runs/railsafe
+resume: true
