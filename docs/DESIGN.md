@@ -694,6 +694,31 @@ TensorRT 0.51 ms/kadr. Wide backbone (18.5M) TensorRT'da 1 kadrda +3%, 4 kadrda 
 TensorRT detektsiyalari PyTorch fp16 bilan 338/343 mos (IoU > 0.9). Demak katta GPU'da neyron tarmoq
 endi to'siq emas: pipeline vaqti asosan CPU tomonda (resize, rang gistogrammasi, treker).
 
+### RailSafe YOLO26n bilan solishtirish (2026-11-03)
+
+RailSafe `models/pereezd_yolo26n.pt` (Ultralytics, 1088, 100 ep) `pereezd_dataset/train` ning hammasida
+o'qigan. Bizning val'ning 1544/1691 kadri shu train'da, qolganlarining 0.2 s qo'shnilari ham. Shuning
+uchun bizning val'da u 89.7 AP (Sarbon v0.1 74.1): bu yodlash, adolatli emas. Adolatli o'lchov oldingi
+YOLO11s (bir xil split, 640): Sarbon 74.1, YOLO11s 69.3.
+
+**Begona domen testi: Open Images V7 val** (`tools/openimages/`, 1000 rasm, faqat CC BY, rasmiy CVDF
+bucket, `C:\data\openimages_val`). Car/Taxi/Limousine = yengil, Bus/Truck = og'ir. Van, Ambulance,
+guruh va tasvir (depiction) box'li rasmlar chiqarilgan. Open Images qoidasi: sinf faqat u tasdiqlangan
+rasmlarda baholanadi (yengil 994, og'ir 200 rasm). Rasmlar ~1024x683.
+
+| Model | yengil AP | og'ir AP | o'rtacha |
+|---|---|---|---|
+| Sarbon v0.1 (640) | 66.1 | 79.9 | 73.0 |
+| Sarbon smart (640) | 66.8 | 79.1 | 72.9 |
+| Sarbon wide (640) | **67.8** | 79.3 | **73.6** |
+| RailSafe YOLO26n @1088 | 15.1 | 7.6 | 11.4 |
+| RailSafe YOLO26n @640 | 44.7 | 36.5 | 40.6 |
+
+YOLO26n faqat o'z pereezd kameralarini biladi: yaqindan olingan va boshqa burchakdagi mashinalarda
+yiqiladi. Cheklov: Open Images (Flickr) COCO'ga o'xshash domen, Sarbon esa COCO bilan o'qigan. Demak bu
+"yangi pereezd kamerasida Sarbon yaxshi" degani emas; bu uchun mustaqil yorliqlangan pereezd kadrlari
+kerak (foydalanuvchi yig'adi).
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
