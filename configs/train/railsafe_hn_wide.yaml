@@ -1,0 +1,24 @@
+# Product detector v0.2 candidate: the wide backbone (COCO 40.9 AP / 17.5 APs against 39.0 / 16.3
+# for the default one) fine-tuned on the crossing data with the reviewed label completion of
+# railsafe_hn_s.yaml (964 missed vehicles added, 29 false-positive frames repeated 3x).
+# The smart-camera people are left out: they cost 1.6 own_AP on the crossings (railsafe_smart_s.yaml).
+coco: C:/data/coco
+taxonomy: railsafe
+yolo: C:/data/pereezd_hardneg_all/split
+yolo_map: "0:3,1:4"
+init: runs/sarbon/s_wide_distill/best.pt
+init_classes: surveillance
+size: s
+widths: "48,96,192"
+depths: "2,3"
+c16: 384
+epochs: 24
+no_aug_epochs: 2
+lr: 2.0e-4
+batch: 16
+workers: 12
+no_halo_zero: true
+eval_every: 2
+tag: _railsafe_hn_wide
+out: runs/railsafe
+resume: true
