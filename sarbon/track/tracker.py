@@ -19,6 +19,7 @@ Options (each measurable on its own):
   oru / ocr / ocm : OC-SORT re-update, recovery and momentum (2203.14360)
   nsa    : confidence-scaled measurement noise (NSA Kalman)
 """
+import itertools
 from dataclasses import dataclass
 
 import numpy as np
@@ -86,7 +87,7 @@ def _unit(x):
 
 
 class Track:
-    _next = 1
+    _ids = itertools.count(1)  # next() is atomic: cameras may be tracked in parallel threads
 
     def __init__(self, box, score, feat, color, frame, kf, nsa):
         self.kf, self.nsa = kf, nsa
@@ -104,7 +105,7 @@ class Track:
 
     def activate(self):
         if self.id == 0:
-            self.id, Track._next = Track._next, Track._next + 1
+            self.id = next(Track._ids)
         self.state = TRACKED
 
     @property

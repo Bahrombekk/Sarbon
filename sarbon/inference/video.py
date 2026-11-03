@@ -12,6 +12,7 @@ Per step (one frame from each camera):
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from ..models.box_ops import cxcywh_to_xyxy
 from ..sparse.convert import stem_to_local
@@ -71,11 +72,18 @@ class SarbonVideo:
 
     # ---------------- helpers ----------------
     def _prep(self, frames):
-        """BGR uint8 frames -> normalised NHWC float tensor at engine size (normalised on the device)."""
-        x = np.stack([cv2.resize(f, (self.w, self.h), interpolation=cv2.INTER_LINEAR)[:, :, ::-1]
-                      for f in frames])
-        x = torch.from_numpy(x).to(self.dev).float()
-        return (x - self._mean) / self._std
+        """BGR uint8 frames -> normalised NHWC float tensor at engine size.
+
+        The uint8 frames are uploaded as they are; BGR->RGB, the bilinear resize (half-pixel
+        centres, as cv2.INTER_LINEAR) and the normalisation run on the device. On the CPU this
+        was a quarter of a 6-camera step (resize + reversed-stride copy + float conversion)."""
+        x = torch.from_numpy(np.stack(frames))
+        if self.dev.type == "cuda":
+            x = x.pin_memory().to(self.dev, non_blocking=True)
+        x = x.flip(-1).permute(0, 3, 1, 2).float()
+        if x.shape[-2:] != (self.h, self.w):
+            x = F.interpolate(x, (self.h, self.w), mode="bilinear", align_corners=False)
+        return (x.permute(0, 2, 3, 1) - self._mean) / self._std
 
     @torch.no_grad()
     def _stem(self, x):
@@ -147,20 +155,21 @@ class SarbonVideo:
         p8 = self._stem(self._prep(frames))
         self.started = True
         out = self._detect(p8)
-        scores_all = out["pred_logits"].float().sigmoid()
-        boxes_all = cxcywh_to_xyxy(out["pred_boxes"].float())
-        results = []
-        for i in range(self.n):
+        # top max_dets queries of every camera, moved to the host in one transfer
+        s_all, lab_all = out["pred_logits"].float().sigmoid().max(-1)
+        s_all, idx = s_all.topk(min(self.max_dets, s_all.shape[1]), -1)
+        take = lambda t: t.gather(1, idx.view(*idx.shape, *[1] * (t.dim() - 2)).expand(*idx.shape, *t.shape[2:]))
+        boxes_all = cxcywh_to_xyxy(take(out["pred_boxes"].float())) * torch.tensor(
+            [self.w, self.h, self.w, self.h], device=self.dev)
+        host = [t.cpu().numpy() for t in (s_all, take(lab_all), boxes_all, take(out.get("id_embed", out["embed"]).float()))]
+
+        def camera(i):
             if steps[i] <= 0:
-                results.append(self.last[i])
-                continue
-            s, lab = scores_all[i].max(-1)
-            keep = (s >= self.keep_score).nonzero()[:, 0]
-            keep = keep[s[keep].argsort(descending=True)][: self.max_dets]
-            boxes = (boxes_all[i, keep] * torch.tensor([self.w, self.h, self.w, self.h], device=self.dev)).cpu().numpy()
-            boxes = boxes * np.r_[scale, scale]
-            sc, lb = s[keep].cpu().numpy(), lab[keep].cpu().numpy()
-            emb = out.get("id_embed", out["embed"])[i, keep].float().cpu().numpy()
+                return self.last[i]
+            sc, lb, boxes, emb = (h[i] for h in host)
+            keep = sc >= self.keep_score  # sorted by score already
+            sc, lb, emb = sc[keep], lb[keep], emb[keep]
+            boxes = boxes[keep] * np.r_[scale, scale]
             col = np.stack([color_descriptor(frames[i], b) for b in boxes]) if self.use_color and len(boxes) else None
             tracks = self.trackers[i].update(boxes, sc, emb, col, steps[i])
             res = []
@@ -170,7 +179,10 @@ class SarbonVideo:
                 res.append({"id": tid, "box": box, "score": float(score),
                             "label": self.class_names[label] if self.class_names and label >= 0 else label,
                             "ground": None if ground is None else ground.tolist()})
-            results.append(res)
+            return res
+
+        # serial on purpose: a thread per camera measured slower (GIL contention in the tracker)
+        results = [camera(i) for i in range(self.n)]
         self.last = results
         self._steer(scale)
         self.stats["frames"] += 1
