@@ -82,13 +82,22 @@ def main():
         log = open(args.log, "w", encoding="utf-8")
     view_h = None
     last = [None] * len(srcs)
+    seen = [(0, 0)] * len(srcs)  # (count, gen) of the frame each camera was last stepped on
     n, paused, ms_hist = 0, False, []
     try:
         while True:
             if not paused:
-                frames = []
+                frames, steps = [], []
                 for i, s in enumerate(srcs):
-                    f = s.read()
+                    f, count, gen = s.grab()
+                    # frames the stream produced since this camera's last step: the tracker
+                    # predicts over all of them; 0 = same frame again, its tracks are left alone
+                    k = count - seen[i][0] if f is not None else 0
+                    if gen != seen[i][1] or k > 5 * s.fps:  # reconnect or long stall
+                        video.reset(i)
+                        k = 1 if f is not None else 0
+                    seen[i] = (count, gen)
+                    steps.append(k)
                     if f is None:
                         f = last[i]
                     if f is None:
@@ -99,10 +108,16 @@ def main():
                     frames.append(cv2.resize(f, (args.view, view_h)))
                 if all(s.ended for s in srcs if not s.live) and not any(s.live for s in srcs):
                     break
+                if not any(steps) and n:  # no camera has a new frame yet
+                    if args.no_show:
+                        time.sleep(0.002)
+                    else:
+                        cv2.waitKey(1)
+                    continue
                 if dev == "cuda":
                     torch.cuda.synchronize()
                 t = time.perf_counter()
-                results = video.step(frames)
+                results = video.step(frames, steps)
                 if dev == "cuda":
                     torch.cuda.synchronize()
                 ms = (time.perf_counter() - t) * 1e3

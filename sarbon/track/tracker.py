@@ -174,6 +174,7 @@ class SarbonTracker:
     def __init__(self, cfg: TrackerConfig = None, img_size=(1920, 1080)):
         self.cfg = cfg or TrackerConfig()
         self.kf, self.gkf = KalmanXYAH(), GroundKalman()
+        self.img_size = img_size
         self.gm = GroundModel(*img_size)
         self.tracks, self.frame = [], 0
 
@@ -286,20 +287,23 @@ class SarbonTracker:
         return cost
 
     # ---------------- main loop ----------------
-    def update(self, boxes, scores, feats=None, colors=None):
+    def update(self, boxes, scores, feats=None, colors=None, steps=1):
         """boxes [N, 4] xyxy, scores [N], feats [N, D], colors [N, K] (optional).
+        steps: source frames since the previous update (> 1 when a live camera dropped frames);
+        motion, buffers and re-ID reach are all counted in source frames.
 
         Returns [(id, box, score, ground_xz or None)] for tracks updated this frame;
         ground_xz is the position on the ground in metres (Z = distance from camera).
         """
         cfg = self.cfg
-        self.frame += 1
+        steps = max(1, int(steps))
+        self.frame += steps
         boxes, scores = np.asarray(boxes, float).reshape(-1, 4), np.asarray(scores, float)
         feats = None if (feats is None or not cfg.emb) else np.asarray(feats, float)
         colors = None if (colors is None or not cfg.color) else np.asarray(colors, float)
         use_app = feats is not None or colors is not None
         geo = self._ground(boxes)
-        self._predict_all()
+        self._predict_all(steps)
         hi = np.where(scores >= cfg.high)[0]
         lo = np.where((scores >= cfg.low) & (scores < cfg.high))[0]
         confirmed = [t for t in self.tracks if t.state != TENTATIVE]
@@ -365,7 +369,7 @@ class SarbonTracker:
                 t.update(boxes[j], scores[j], None, None, self.frame, cfg, (geo[j][0], geo[j][1]),
                          self.gkf, geo[j][2])
                 t.hits = 1
-            if self.frame == 1:
+            if self.frame == steps:  # first update: the scene starts with confirmed tracks
                 t.activate()
             self.tracks.append(t)
         keep_for = cfg.reid_buffer if (cfg.reid and use_app) else cfg.buffer
@@ -375,29 +379,30 @@ class SarbonTracker:
         return [(t.id, t.last_box.copy(), t.score, None if t.g_last is None else t.g_last.copy())
                 for t in self.tracks if t.state == TRACKED and t.last_frame == self.frame]
 
-    def coast(self):
+    def coast(self, steps=1):
         """A frame the detector did not run on: advance every track by its motion model only.
 
         Nothing is matched, born or lost; returns the predicted boxes of the live tracks in the
         same form as update(), so a compute scheduler can skip frames transparently.
         """
-        self.frame += 1
-        self._predict_all()
+        steps = max(1, int(steps))
+        self.frame += steps
+        self._predict_all(steps)
         return [(t.id, t.box.copy(), t.score, None) for t in self.tracks if t.state == TRACKED]
 
-    def _predict_all(self):
+    def _predict_all(self, dt=1):
         """Kalman predict of every track in one batched step (image and ground filters)."""
         ts = self.tracks
         if not ts:
             return
         m = np.stack([t.mean for t in ts])
         m[np.array([t.state != TRACKED for t in ts]), 7] = 0.0  # ByteTrack: freeze height velocity
-        m, c = self.kf.predict_batch(m, np.stack([t.cov for t in ts]))
+        m, c = self.kf.predict_batch(m, np.stack([t.cov for t in ts]), dt)
         for t, a, b in zip(ts, m, c):
             t.mean, t.cov = a, b
         gt = [t for t in ts if t.g is not None]
         if gt:
-            gm, gc = self.gkf.predict_batch(np.stack([t.g[0] for t in gt]), np.stack([t.g[1] for t in gt]))
+            gm, gc = self.gkf.predict_batch(np.stack([t.g[0] for t in gt]), np.stack([t.g[1] for t in gt]), dt)
             for t, a, b in zip(gt, gm, gc):
                 t.g = (a, b)
 

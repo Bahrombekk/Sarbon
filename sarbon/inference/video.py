@@ -53,6 +53,7 @@ class SarbonVideo:
         self.tracker_cfg = tracker_cfg or TrackerConfig(emb=True, color=0.7 if use_color else 0.0,
                                                         reid=True, ground=True)
         self.trackers = None  # created on the first frame (needs the camera resolution)
+        self.last = [[] for _ in range(n_cams)]  # previous step's result per camera
         self.engine = None
         if self.dev.type == "cuda":
             from ..sparse.fused_engine import FusedSparseEngine
@@ -125,11 +126,20 @@ class SarbonVideo:
         self.engine.set_extra(torch.from_numpy(np.stack(masks)).to(self.dev))
 
     # ---------------- main ----------------
+    def reset(self, i):
+        """Forget camera i's tracks (reconnect or long stall: its motion history no longer holds)."""
+        if self.trackers is not None:
+            self.trackers[i] = SarbonTracker(self.tracker_cfg, self.trackers[i].img_size)
+        self.last[i] = []
+
     @torch.no_grad()
-    def step(self, frames):
-        """frames: list of N BGR uint8 images (same resolution). Returns per camera a list of
+    def step(self, frames, steps=None):
+        """frames: list of N BGR uint8 images (same resolution). steps: per camera, source frames
+        since its previous step (default 1); 0 = the same frame again, its tracker is not advanced
+        and the previous result is returned. Returns per camera a list of
         {"id", "box" (xyxy, frame pixels), "score", "label", "ground" ([X, Z] metres or None)}."""
         assert len(frames) == self.n
+        steps = [1] * self.n if steps is None else steps
         h0, w0 = frames[0].shape[:2]
         if self.trackers is None:
             self.trackers = [SarbonTracker(self.tracker_cfg, (w0, h0)) for _ in range(self.n)]
@@ -141,6 +151,9 @@ class SarbonVideo:
         boxes_all = cxcywh_to_xyxy(out["pred_boxes"].float())
         results = []
         for i in range(self.n):
+            if steps[i] <= 0:
+                results.append(self.last[i])
+                continue
             s, lab = scores_all[i].max(-1)
             keep = (s >= self.keep_score).nonzero()[:, 0]
             keep = keep[s[keep].argsort(descending=True)][: self.max_dets]
@@ -149,7 +162,7 @@ class SarbonVideo:
             sc, lb = s[keep].cpu().numpy(), lab[keep].cpu().numpy()
             emb = out.get("id_embed", out["embed"])[i, keep].float().cpu().numpy()
             col = np.stack([color_descriptor(frames[i], b) for b in boxes]) if self.use_color and len(boxes) else None
-            tracks = self.trackers[i].update(boxes, sc, emb, col)
+            tracks = self.trackers[i].update(boxes, sc, emb, col, steps[i])
             res = []
             for tid, box, score, ground in tracks:
                 j = int(np.argmin(np.abs(boxes - box).sum(1))) if len(boxes) else -1
@@ -158,6 +171,7 @@ class SarbonVideo:
                             "label": self.class_names[label] if self.class_names and label >= 0 else label,
                             "ground": None if ground is None else ground.tolist()})
             results.append(res)
+        self.last = results
         self._steer(scale)
         self.stats["frames"] += 1
         return results

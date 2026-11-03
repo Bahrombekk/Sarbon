@@ -101,9 +101,14 @@ class GroundKalman:
         g = np.array([[0.5, 0], [0, 0.5], [1, 0], [0, 1]])
         return self.F @ mean, self.F @ cov @ self.F.T + g @ g.T * self.q ** 2
 
-    def predict_batch(self, means, covs):
-        g = np.array([[0.5, 0], [0, 0.5], [1, 0], [0, 1]])
-        return means @ self.F.T, self.F @ covs @ self.F.T + g @ g.T * self.q ** 2
+    def predict_batch(self, means, covs, dt=1):
+        """dt: frames elapsed; acceleration noise acts over the whole interval."""
+        g = np.array([[0.5 * dt * dt, 0], [0, 0.5 * dt * dt], [dt, 0], [0, dt]])
+        f = self.F
+        if dt != 1:
+            f = np.eye(4)
+            f[:2, 2:] = dt * np.eye(2)
+        return means @ f.T, f @ covs @ f.T + g @ g.T * self.q ** 2
 
     def update_batch(self, means, covs, zs, rs):
         k = covs[:, :, :2] @ inv2(covs[:, :2, :2] + rs)

@@ -10,6 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sarbon.track.ground import GroundKalman  # noqa: E402
 from sarbon.track.kalman import KalmanXYAH, inv2, inv4  # noqa: E402
+from sarbon.track.tracker import SarbonTracker, TrackerConfig  # noqa: E402
 
 
 def spd(rng, n, d):
@@ -50,6 +51,29 @@ def main():
         assert np.allclose(gk.mahalanobis(rm, rc, gz, gr), pairs[i])
         rm, rc = gk.update(rm, rc, gz[0], gr[0])
         assert np.allclose(rm, um[i]) and np.allclose(rc, uc[i])
+
+    # dt > 1 moves the mean exactly like dt single steps; the uncertainty is not smaller
+    for f, m, c in ((kf, means, covs), (gk, gm, gc)):
+        m3, c3 = f.predict_batch(m, c, 3)
+        r, rc = m, c
+        for _ in range(3):
+            r, rc = f.predict_batch(r, rc)
+        assert np.allclose(m3, r)
+        assert (np.linalg.eigvalsh(c3) > 0).all()
+
+    # dropped frames (live camera slower than the stream): a box moving 3 px/frame, seen on
+    # every 4th frame, keeps one ID and its predicted box stays on it
+    for steps in (1, 4):
+        tr = SarbonTracker(TrackerConfig())
+        ids = set()
+        for f in range(0, 120, steps):
+            x = 100 + 3.0 * f
+            out = tr.update(np.array([[x, 200, x + 40, 300]]), np.array([0.9]), steps=steps)
+            ids |= {i for i, *_ in out}
+        pred = tr.tracks[0].box  # after the update; predict one interval ahead
+        tr._predict_all(steps)
+        assert len(ids) == 1, (steps, ids)
+        assert abs(tr.tracks[0].box[0] - (100 + 3.0 * (f + steps))) < 3, (steps, tr.tracks[0].box, pred)
     print("OK")
 
 

@@ -53,7 +53,12 @@ def expand_sources(items, cam_filter):
 
 
 class Source:
-    """One camera or file. Live sources: a thread keeps only the newest frame."""
+    """One camera or file. Live sources: a thread keeps only the newest frame.
+
+    `count` numbers the frames the source has produced and `gen` the (re)connections, so a
+    consumer slower than the stream knows how many frames it skipped (tracker dt), when it was
+    handed the same frame again, and when a reconnect broke the motion history.
+    """
 
     def __init__(self, name, src, live):
         self.name, self.src, self.live = name, src, live
@@ -63,6 +68,7 @@ class Source:
             raise RuntimeError(f"cannot open {name} ({safe(src) if isinstance(src, str) else src})")
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
         self.frame, self.ended, self.lock = None, False, threading.Lock()
+        self.count, self.gen = 0, 0
         self.thread = None
         if live:
             self.thread = threading.Thread(target=self._reader, daemon=True)
@@ -79,20 +85,28 @@ class Source:
                     time.sleep(2)
                     self.cap = cv2.VideoCapture(self.src, cv2.CAP_FFMPEG)
                     fails = 0
+                    with self.lock:
+                        self.gen += 1
                 continue
             fails = 0
             with self.lock:
                 self.frame = f
+                self.count += 1
 
     def read(self):
+        return self.grab()[0]
+
+    def grab(self):
+        """(frame, count, gen): the newest frame with its sequence number and connection number."""
         if not self.live:
             ok, f = self.cap.read()
             if not ok:
                 self.ended = True
-                return None
-            return f
+                return None, self.count, self.gen
+            self.count += 1
+            return f, self.count, self.gen
         with self.lock:
-            return self.frame
+            return self.frame, self.count, self.gen
 
     def close(self):
         self.ended = True

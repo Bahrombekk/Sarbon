@@ -52,12 +52,20 @@ class KalmanXYAH:
                                _STD_VEL * h, _STD_VEL * h, 1e-5, _STD_VEL * h]))
         return self.F @ mean, self.F @ cov @ self.F.T + q
 
-    def predict_batch(self, means, covs):
-        """predict() for N tracks at once: means [N, 8], covs [N, 8, 8]."""
+    def predict_batch(self, means, covs, dt=1):
+        """predict() for N tracks at once: means [N, 8], covs [N, 8, 8].
+
+        dt: source frames elapsed (live cameras drop frames when the pipeline is slower than the
+        stream); the noise per frame is a random walk, so its variance grows linearly with dt.
+        """
         std = means[:, 3:4] * np.array([_STD_POS, _STD_POS, 0, _STD_POS, _STD_VEL, _STD_VEL, 0, _STD_VEL])
         std[:, 2], std[:, 6] = 1e-2, 1e-5
-        q = np.square(std)[:, :, None] * np.eye(8)
-        return means @ self.F.T, self.F @ covs @ self.F.T + q
+        q = dt * np.square(std)[:, :, None] * np.eye(8)
+        f = self.F
+        if dt != 1:
+            f = np.eye(8)
+            f[:4, 4:] = dt * np.eye(4)
+        return means @ f.T, f @ covs @ f.T + q
 
     def update_batch(self, means, covs, zs, scores=None):
         """update() for N tracks at once (H selects the first 4 state entries)."""
