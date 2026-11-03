@@ -63,8 +63,10 @@ class Source:
             raise RuntimeError(f"cannot open {name} ({safe(src) if isinstance(src, str) else src})")
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 25
         self.frame, self.ended, self.lock = None, False, threading.Lock()
+        self.thread = None
         if live:
-            threading.Thread(target=self._reader, daemon=True).start()
+            self.thread = threading.Thread(target=self._reader, daemon=True)
+            self.thread.start()
 
     def _reader(self):
         fails = 0
@@ -94,6 +96,8 @@ class Source:
 
     def close(self):
         self.ended = True
+        if self.thread is not None:  # releasing while the reader is inside read() crashes FFmpeg (HEVC)
+            self.thread.join(timeout=5)
         self.cap.release()
 
 
