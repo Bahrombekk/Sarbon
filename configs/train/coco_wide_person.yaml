@@ -1,0 +1,21 @@
+# General base model: coco_wide.yaml + own overhead/indoor people (partial labels: these images
+# annotate person only, so their unlabelled classes get no loss). 50 epochs: coco_wide.yaml peaked
+# at epoch 48 (40.9 AP) and declined to 39.5 by 72.
+#   person_split: D:/Data Sentir/person, one lobby camera, 1766 train / 150 val (held-out blocks)
+#   smart_split : own smart depot/workshop cameras, 11895 / 1496
+coco: C:/data/coco
+own:
+  - C:/data/person_split=0:0
+  - C:/data/smart_split=0:0
+size: s
+widths: "48,96,192"
+depths: "2,3"
+c16: 384
+epochs: 50
+batch: 16
+workers: 12
+no_halo_zero: true
+init: runs/pretrain/s_wide_distill.pt
+tag: _wide_person
+out: runs/sarbon
+resume: true
