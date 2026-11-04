@@ -744,6 +744,30 @@ Bitta kadrda Sarbon tezroq (ikkalasi ham launch overhead chegarasida), 6 kamera 
 ~2.3x tezroq (7.8x kam parametr). Ikkalasi ham byudjetdan ancha past: 6 x 25 fps = 150 kadr/s, Sarbon
 TRT ~870 kadr/s ko'taradi. sarbon-run hozir TRT emas, CUDA graph ishlatadi (b6 18.9 ms).
 
+**Nega Sarbon og'ir (2026-11-04).** 1088 da Sarbon v0.3 238.7 GFLOPs/rasm, YOLO26n 16.7 (14x). TensorRT
+qatlam profili (b6): stem s2–s8 **39%** (s4 ikki va s8 uch Res blok, 96/192 kanal, 272² va 136² xaritada:
+sparse stem tezisi uchun yuqori rezolyutsiyada og'ir qilingan, u esa real videoda foyda bermadi),
+Myelin "glue" (memory concat, anchor niqobi, LayerNorm 24k token ustida, top-k, deformable grid) 18%,
+s16/s32 13%, qolgani neck, decoder va headlar. O'qitilmagan variantlar, TRT fp16, 1088, b6 (±0.5 ms shovqin):
+
+| Variant | Param | GFLOPs | b6 ms |
+|---|---|---|---|
+| v0.3: widths 48/96/192, depths 2,3, c16 384, hidden 256, 300 q, 4 dec | 18.5M | 238.7 | 7.1–8.0 |
+| A depths 1,1 | 17.0M | 165.0 | 6.2 |
+| B + widths 32/64/128 | 16.2M | 128.0 | 5.2–5.4 |
+| C = B + dw bloklar | 11.7M | 79.5 | 4.5–5.3 |
+| D = B + c16 256 | 12.8M | 98.4 | 4.4–4.7 |
+| F = D + 150 query, 3 dec | 11.6M | 93.3 | 4.2 |
+| **G = F + hidden 192, ffn 768** | 8.7M | 77.6 | **3.5** |
+| H = F + hidden 128 | 6.7M | 66.7 | 3.5 |
+| I = H + dw | 4.1M | 36.3 | 3.6 |
+| YOLO26n | 2.4M | 16.7 | 2.9 |
+
+~3.4 ms dan pastda FLOPs kamaytirish yordam bermaydi: qolgan vaqt glue va kichik kernellar (decoder,
+deformable attention, 3 darajali memory). YOLO26n darajasiga borish uchun ular ham qayta yozilishi kerak
+(proposal faqat P16/P32 da yoki arzon head, doimiy anchorlar, kamroq daraja). Aniqlik o'qitishsiz
+noma'lum: G to'liq zanjir bilan o'qitilishi kerak (distill ~1 soat, COCO base ~9 soat, pereezd 1088 ~8 soat).
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
