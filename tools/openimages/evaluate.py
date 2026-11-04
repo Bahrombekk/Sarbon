@@ -22,29 +22,39 @@ YOLO = {"RailSafe YOLO26n @1088": R / "yolo26n_1088.json", "RailSafe YOLO26n @64
 
 
 def main():
-    extra = dict(a.split("=", 1) for a in sys.argv[1:])  # name=weights.pt adds a Sarbon model
+    # name=weights.pt[@size] adds a Sarbon model, evaluated at that input size (default 640)
+    extra = dict(a.split("=", 1) for a in sys.argv[1:])
     sel = json.load(open(R / "selection.json", encoding="utf8"))
-    ds = YoloDetection(R / "val.txt", 640, {0: 3, 1: 4}, train=False)
-    gt = ds.gt_letterboxed()
-    ver = {im["id"]: sel[Path(im["file_name"]).stem]["verified"] for im in ds.images}
-    subset = {3: {i for i, v in ver.items() if v["yengil"] is not None},
-              4: {i for i, v in ver.items() if v["ogir"] is not None}}
+    sets = {}
+
+    def at(size):
+        if size not in sets:
+            ds = YoloDetection(R / "val.txt", size, {0: 3, 1: 4}, train=False)
+            ver = {im["id"]: sel[Path(im["file_name"]).stem]["verified"] for im in ds.images}
+            sets[size] = ds, ds.gt_letterboxed(), {
+                3: {i for i, v in ver.items() if v["yengil"] is not None},
+                4: {i for i, v in ver.items() if v["ogir"] is not None}}
+        return sets[size]
+
     dets = {}
     for name, w in {**MODELS, **extra}.items():
+        w, size = (w.rsplit("@", 1)[0], int(w.rsplit("@", 1)[1])) if "@" in w else (w, 640)
+        ds = at(size)[0]
         m = load_detector(w, "s", 6, halo_zero=False).cuda().eval()
         out = []
-        for imgs, _, _, meta in DataLoader(ds, 16, num_workers=4, collate_fn=collate):
+        for imgs, _, _, meta in DataLoader(ds, 8, num_workers=4, collate_fn=collate):
             with torch.no_grad(), torch.autocast("cuda", torch.bfloat16):
                 o = m(prep(imgs, torch.device("cuda")))
-            for (bx, sc, lb), mm in zip(postprocess(o, 640), meta):
+            for (bx, sc, lb), mm in zip(postprocess(o, size), meta):
                 out += [{"image_id": mm[0], "category_id": l, "bbox": [b[0], b[1], b[2] - b[0], b[3] - b[1]], "score": s}
                         for b, s, l in zip(bx.float().tolist(), sc.float().tolist(), lb.tolist())]
-        dets[name] = out
+        dets[name] = size, out
     for name, p in YOLO.items():
         if p.exists():
-            dets[name] = yolo_dets(ds, p, {0: 3, 1: 4})
+            dets[name] = 640, yolo_dets(at(640)[0], p, {0: 3, 1: 4})  # normalised boxes: any frame works
     res = {}
-    for name, d in dets.items():
+    for name, (size, d) in dets.items():
+        _, gt, subset = at(size)
         r = {}
         for c, cname in ((3, "yengil"), (4, "ogir")):
             ids = subset[c]
@@ -53,7 +63,8 @@ def main():
         r["mean_AP"] = round((r["yengil_AP"] + r["ogir_AP"]) / 2, 1)
         res[name] = r
     (R / "result.json").write_text(json.dumps(res, indent=1, ensure_ascii=False))
-    print("images", len(ds), "yengil images", len(subset[3]), "og'ir images", len(subset[4]))
+    _, _, subset = at(640)
+    print("images", len(sel), "yengil images", len(subset[3]), "og'ir images", len(subset[4]))
     for k, v in res.items():
         print(f"{k:26s}", v)
 

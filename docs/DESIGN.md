@@ -719,6 +719,20 @@ yiqiladi. Cheklov: Open Images (Flickr) COCO'ga o'xshash domen, Sarbon esa COCO 
 "yangi pereezd kamerasida Sarbon yaxshi" degani emas; bu uchun mustaqil yorliqlangan pereezd kadrlari
 kerak (foydalanuvchi yig'adi).
 
+**YOLO26n sharoitida o'qitilgan Sarbon (2026-11-04).** Avval umumiy asos `coco_wide_person.yaml`
+(wide + o'z kameralardagi odamlar, 50 ep). COCO AP 40.9 → 39.6 (-1.3), lekin o'z kameralardagi odam AP:
+person val 43.3 → **71.8**, smart val 59.6 → **82.5**. Undan `railsafe_full_1088.yaml`: YOLO26n'ning
+o'z train/val papkalari, asl yorliqlar, 1088, batch 8, 30 ep (8 soat). Eng yaxshisi oxirgi epoxada.
+
+| Model | Pereezd val (YOLO26n'niki, 765) | yengil | og'ir | kichik | Open Images o'rtacha |
+|---|---|---|---|---|---|
+| **Sarbon full_1088 @1088** | **91.0** | **90.9** | **91.1** | **71.7** | **74.0** |
+| RailSafe YOLO26n @1088 | 89.4 | 89.8 | 89.0 | 65.7 | 11.4 (640 da 40.6) |
+
+Bir xil ma'lumot va o'lchamda Sarbon YOLO26n'dan pereezdda +1.6 AP (kichik obyektlarda +6.0) va begona
+domenda +62.6 AP ustun. Model o'z o'lchamida ishlatilishi kerak: 1088 model 640 da Open Images'da 52.5,
+640 da o'qigan wide 1088 da 35.8.
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
