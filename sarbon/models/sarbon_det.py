@@ -192,6 +192,8 @@ class SarbonDetector(nn.Module):
         self.corner_heads = nn.ModuleList(mlp(d, d, 4 * (cfg.reg_max + 1), 3)
                                           for _ in range(cfg.dec_layers))
         self.register_buffer("project", fdr_project(cfg.reg_max, 0.5, cfg.reg_scale), persistent=False)
+        # saved so a checkpoint can be rebuilt as trained: the query count has no weights of its own
+        self.register_buffer("n_queries", torch.tensor(cfg.queries))
         self.dn_label = nn.Embedding(num_classes + 1, d)  # last row: padding
         # identity embedding for re-identification (trained with an ID contrastive loss on
         # video clips; until then it is an untrained projection and the tracker leans on colour)
@@ -371,24 +373,40 @@ def build(size="s", num_classes=6, **overrides):
     return SarbonDetector(num_classes, cfg)
 
 
+OPTIONAL_KEYS = ("id_head.", "n_queries")  # added after older checkpoints were trained
+
+
 def load_weights(model, path):
-    """Load a checkpoint; heads added after it was trained (id_head) may be missing."""
+    """Load a checkpoint; parts added after it was trained (id_head, n_queries) may be missing."""
     sd = torch.load(path, map_location="cpu")
     missing, unexpected = model.load_state_dict(sd, strict=False)
-    bad = [k for k in missing if not k.startswith("id_head.")] + list(unexpected)
+    bad = [k for k in missing if not k.startswith(OPTIONAL_KEYS)] + list(unexpected)
     if bad:
         raise RuntimeError(f"checkpoint mismatch: {bad[:5]}")
     return model
 
 
 def arch_from_state_dict(sd):
-    """Backbone overrides (widths, depths, c16) read back from a checkpoint's tensor shapes."""
-    def blocks(prefix):
-        return len({k.split(".")[2] for k in sd if k.startswith(prefix)})
+    """Architecture overrides read back from a checkpoint's tensor shapes.
 
-    return {"widths": (sd["stem.stem.0.0.weight"].shape[0], sd["stem.stem.1.0.weight"].shape[0],
-                       sd["stem.s8.0.body.0.0.weight"].shape[0]),
-            "depths": (blocks("stem.s4."), blocks("stem.s8.")), "c16": sd["core.to16.0.0.weight"].shape[0]}
+    Backbone (widths, depths, c16, c32) always; the neck/decoder sizes (hidden, ffn, heads,
+    dec_layers) when the checkpoint has a decoder, and queries when it was saved (n_queries).
+    Heads assume the default 4 sampling points (the offsets give heads x points only).
+    """
+    def count(prefix, at=2):
+        return len({k.split(".")[at] for k in sd if k.startswith(prefix)})
+
+    out = {"widths": (sd["stem.stem.0.0.weight"].shape[0], sd["stem.stem.1.0.weight"].shape[0],
+                      sd["stem.s8.0.body.0.0.weight"].shape[0]),
+           "depths": (count("stem.s4."), count("stem.s8.")), "c16": sd["core.to16.0.0.weight"].shape[0],
+           "c32": sd["core.to32.0.0.weight"].shape[0], "hidden": sd["core.in8.0.weight"].shape[0]}
+    if "layers.0.ffn.0.weight" in sd:
+        out["ffn"] = sd["layers.0.ffn.0.weight"].shape[0]
+        out["dec_layers"] = count("layers.", 1)
+        out["heads"] = sd["layers.0.cross.attn.weight"].shape[0] // (3 * SarbonConfig.points)
+    if "n_queries" in sd:
+        out["queries"] = int(sd["n_queries"])
+    return out
 
 
 def load_detector(path, size="s", num_classes=6, **overrides):

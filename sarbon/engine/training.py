@@ -35,7 +35,7 @@ def load_init(model, path, src_names=None, dst_names=None, alias=None):
     own = model.state_dict()
     take, remapped = {}, 0
     for k, v in sd.items():
-        if k not in own:
+        if k not in own or k == "n_queries":  # the query count is this model's own setting
             continue
         if k.startswith(CLASS_KEYS):
             if not (src_names and dst_names):
@@ -86,6 +86,12 @@ def add_arch_args(ap):
     ap.add_argument("--widths", help="stem widths at stride 2/4/8, e.g. 48,96,192")
     ap.add_argument("--depths", help="Res blocks at stride 4/8, e.g. 2,3")
     ap.add_argument("--c16", type=int, help="channels of the stride-16 stage")
+    ap.add_argument("--c32", type=int, help="channels of the stride-32 stage")
+    ap.add_argument("--hidden", type=int, help="neck / decoder width")
+    ap.add_argument("--heads", type=int, help="attention heads (hidden must divide by it)")
+    ap.add_argument("--ffn", type=int, help="feed-forward width of the attention layers")
+    ap.add_argument("--dec-layers", type=int, help="decoder layers")
+    ap.add_argument("--queries", type=int, help="object queries selected from the encoder")
 
 
 def arch_overrides(args):
@@ -94,6 +100,7 @@ def arch_overrides(args):
         out["widths"] = tuple(int(v) for v in str(args.widths).split(","))
     if args.depths:
         out["depths"] = tuple(int(v) for v in str(args.depths).split(","))
-    if args.c16:
-        out["c16"] = args.c16
+    for k in ("c16", "c32", "hidden", "heads", "ffn", "dec_layers", "queries"):
+        if getattr(args, k, None):
+            out[k] = getattr(args, k)
     return out

@@ -20,7 +20,7 @@ from ..config import parse_with_config
 from ..data.coco import collate
 from ..data.yolo import YoloDetection, imread_at_least
 from ..evaluation import coco_metrics, evaluate
-from ..models.sarbon_det import build
+from ..models.sarbon_det import build, load_weights
 from ..paths import RUNS
 
 
@@ -70,7 +70,7 @@ def main():
     cats = sorted(set(cmap.values()))
     ds = YoloDetection(Path(args.split) / "val.txt", args.img, cmap, train=False)
     model = build(args.size, args.num_classes, halo_zero=False).cuda().eval()
-    model.load_state_dict(torch.load(args.sarbon, map_location="cpu"))
+    load_weights(model, args.sarbon)
     dl = DataLoader(ds, 16, num_workers=4, collate_fn=collate)
     res = {"val_images": len(ds), "classes": cats,
            "sarbon": evaluate(model, ds, dl, torch.device("cuda"), args.num_classes, args.img, cats)}

@@ -1,0 +1,26 @@
+# Light general base ("G" in DESIGN.md, "Nega Sarbon og'ir"): the coco_wide_person.yaml recipe on a
+# smaller network -- stem 32/64/128 with one block per stage, stride-16 256 ch, neck/decoder 192
+# wide (6 heads, ffn 768), 3 decoder layers, 150 queries. 8.7M params, 77.6 GFLOPs at 1088
+# (wide: 18.5M, 239); untrained TensorRT fp16 batch 6 at 1088: 3.5 ms (wide 7.1-8.0, YOLO26n 2.9).
+# Init: DINOv2 distillation of the same backbone (jobs\light_pipeline.ps1 runs it first).
+coco: C:/data/coco
+own:
+  - C:/data/person_split=0:0
+  - C:/data/smart_split=0:0
+size: s
+widths: "32,64,128"
+depths: "1,1"
+c16: 256
+hidden: 192
+heads: 6
+ffn: 768
+dec_layers: 3
+queries: 150
+epochs: 50
+batch: 16
+workers: 12
+no_halo_zero: true
+init: runs/pretrain/s_light_distill.pt
+tag: _light_person
+out: runs/sarbon
+resume: true

@@ -768,6 +768,11 @@ deformable attention, 3 darajali memory). YOLO26n darajasiga borish uchun ular h
 (proposal faqat P16/P32 da yoki arzon head, doimiy anchorlar, kamroq daraja). Aniqlik o'qitishsiz
 noma'lum: G to'liq zanjir bilan o'qitilishi kerak (distill ~1 soat, COCO base ~9 soat, pereezd 1088 ~8 soat).
 
+G o'qitilmoqda (2026-11-04, `jobs\light_pipeline.ps1`): distill → `coco_light_person.yaml` →
+`railsafe_light_1088.yaml`. Arxitektura CLI/YAML'da (`--hidden --heads --ffn --dec-layers --queries`)
+va checkpoint shakllaridan qayta tiklanadi (`arch_from_state_dict`; query soni `n_queries` buferida).
+Qabul qoidasi: v0.3 bilan bir xil val'da ≤ 1 AP pasayish va Open Images'da sezilarli yo'qotish yo'q.
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta

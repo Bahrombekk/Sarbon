@@ -1,0 +1,30 @@
+# railsafe_full_1088.yaml (the v0.3 recipe: RailSafe YOLO26n train/val, original labels, 1088,
+# batch 8) on the light network of coco_light_person.yaml, started from that base. Compared with
+# v0.3 on the same val and on Open Images; replaces it if it loses at most ~1 AP.
+#   C:/data/pereezd_yolo_split: train 7648, val 765 (build.json)
+coco: C:/data/coco
+taxonomy: railsafe
+yolo: C:/data/pereezd_yolo_split
+yolo_map: "0:3,1:4"
+init: runs/sarbon/s_light_person/best.pt
+init_classes: surveillance
+size: s
+widths: "32,64,128"
+depths: "1,1"
+c16: 256
+hidden: 192
+heads: 6
+ffn: 768
+dec_layers: 3
+queries: 150
+img: 1088
+epochs: 30
+no_aug_epochs: 2
+lr: 1.4e-4
+batch: 8
+workers: 12
+no_halo_zero: true
+eval_every: 2
+tag: _railsafe_light_1088
+out: runs/railsafe
+resume: true
