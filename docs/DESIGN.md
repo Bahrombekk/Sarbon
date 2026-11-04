@@ -733,6 +733,17 @@ Bir xil ma'lumot va o'lchamda Sarbon YOLO26n'dan pereezdda +1.6 AP (kichik obyek
 domenda +62.6 AP ustun. Model o'z o'lchamida ishlatilishi kerak: 1088 model 640 da Open Images'da 52.5,
 640 da o'qigan wide 1088 da 35.8.
 
+Tezlik (RTX 5090, 1088x1088, fp16, faqat tarmoq, GPU bo'sh; YOLO TensorRT 10.15, Sarbon 11.4):
+
+| | Parametr | TRT b1 | TRT b6 (6 kamera) | PyTorch b1 | Sarbon CUDA graph b1 / b6 |
+|---|---|---|---|---|---|
+| Sarbon v0.3 | 18.5M | **2.57 ms** | 6.89 ms (1.15/kadr) | 30.7 ms | 4.0 / 18.9 ms |
+| YOLO26n | 2.4M | 3.02 ms | **2.94 ms** (0.49/kadr) | 18.2 ms | — |
+
+Bitta kadrda Sarbon tezroq (ikkalasi ham launch overhead chegarasida), 6 kamera batch'ida YOLO26n
+~2.3x tezroq (7.8x kam parametr). Ikkalasi ham byudjetdan ancha past: 6 x 25 fps = 150 kadr/s, Sarbon
+TRT ~870 kadr/s ko'taradi. sarbon-run hozir TRT emas, CUDA graph ishlatadi (b6 18.9 ms).
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
