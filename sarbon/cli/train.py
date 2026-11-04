@@ -19,6 +19,7 @@ CPU smoke test:
 import argparse
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -34,6 +35,30 @@ from ..evaluation import evaluate
 from ..models.criterion import HungarianMatcher, SetCriterion
 from ..models.sarbon_det import build
 from ..paths import RUNS
+
+
+def save_ckpt(state, path):
+    """Write durably: fsync the new file before it replaces the old one, and keep the previous
+    checkpoint as <name>.prev.pt (a power cut once left a torn ckpt.pt behind the rename)."""
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "wb") as f:
+        torch.save(state, f)
+        f.flush()
+        os.fsync(f.fileno())
+    if path.exists():
+        path.replace(path.with_suffix(".prev.pt"))
+    tmp.replace(path)
+
+
+def load_ckpt(path):
+    """The newest readable checkpoint: <name>.pt, else <name>.prev.pt; None if there is none."""
+    for p in (path, path.with_suffix(".prev.pt")):
+        if p.exists():
+            try:
+                return torch.load(p, map_location="cpu", weights_only=False)
+            except Exception as e:  # torn file
+                print(f"cannot read {p} ({e.__class__.__name__}), trying the previous one", flush=True)
+    return None
 
 
 def main():
@@ -147,15 +172,15 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     log, best, t0, start = [], -1.0, time.time(), 0
     ckpt = out_dir / "ckpt.pt"
-    if args.resume and ckpt.exists():
-        c = torch.load(ckpt, map_location="cpu", weights_only=False)
+    c = load_ckpt(ckpt) if args.resume else None
+    if c is not None:
         model.load_state_dict(c["model"])
         ema.ema.load_state_dict(c["ema"])
         ema.updates = c["ema_updates"]
         opt.load_state_dict(c["opt"])
         sched.load_state_dict(c["sched"])
         start, log, best = c["epoch"], c["log"], c["best"]
-        print(f"resumed from {ckpt} at epoch {start}", flush=True)
+        print(f"resumed at epoch {start}", flush=True)
     for ep in range(start, args.epochs):
         if ep >= args.epochs - args.no_aug_epochs and mosaics[0].prob > 0:
             for m in mosaics:
@@ -197,10 +222,9 @@ def main():
                 best = score
                 torch.save(ema.ema.state_dict(), out_dir / "best.pt")
         # full training state every epoch: a killed run loses at most one epoch (--resume)
-        torch.save({"model": model.state_dict(), "ema": ema.ema.state_dict(), "ema_updates": ema.updates,
-                    "opt": opt.state_dict(), "sched": sched.state_dict(), "epoch": ep + 1, "log": log,
-                    "best": best}, out_dir / "ckpt.tmp")
-        (out_dir / "ckpt.tmp").replace(ckpt)
+        save_ckpt({"model": model.state_dict(), "ema": ema.ema.state_dict(), "ema_updates": ema.updates,
+                   "opt": opt.state_dict(), "sched": sched.state_dict(), "epoch": ep + 1, "log": log,
+                   "best": best}, ckpt)
 
 
 if __name__ == "__main__":

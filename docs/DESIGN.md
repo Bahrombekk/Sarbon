@@ -773,6 +773,11 @@ G o'qitilmoqda (2026-11-04, `jobs\light_pipeline.ps1`): distill → `coco_light_
 va checkpoint shakllaridan qayta tiklanadi (`arch_from_state_dict`; query soni `n_queries` buferida).
 Qabul qoidasi: v0.3 bilan bir xil val'da ≤ 1 AP pasayish va Open Images'da sezilarli yo'qotish yo'q.
 
+G umumiy asosi (`s_light_person`, 640): best = 32-epoxa (o'z ma'lumotlari bo'yicha). COCO AP 34.0
+(wide 39.6), person 68.1 (71.8), smart 80.2 (82.5), AP_small 12.2 (16.3). 43-epoxada elektr o'chib,
+`ckpt.pt` yarim yozilgan holda qoldi; o'z AP'i 32-epoxadan keyin o'smagani uchun run qayta boshlanmadi.
+Shundan keyin `train.py` checkpoint'ni fsync qilib yozadi va oldingisini `ckpt.prev.pt` sifatida saqlaydi.
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
