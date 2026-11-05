@@ -778,6 +778,20 @@ G umumiy asosi (`s_light_person`, 640): best = 32-epoxa (o'z ma'lumotlari bo'yic
 `ckpt.pt` yarim yozilgan holda qoldi; o'z AP'i 32-epoxadan keyin o'smagani uchun run qayta boshlanmadi.
 Shundan keyin `train.py` checkpoint'ni fsync qilib yozadi va oldingisini `ckpt.prev.pt` sifatida saqlaydi.
 
+**G natijasi (2026-11-05).** Pereezd 1088 (`railsafe_light_1088.yaml`, best = 28-epoxa), bir xil baholovchi:
+
+| Model | Param. | YOLO26n val AP | small | yengil / og'ir | Open Images | TRT b1 | TRT b6 |
+|---|---|---|---|---|---|---|---|
+| Sarbon v0.3 | 18.5M | **91.0** | **71.7** | 90.9 / 91.1 | **74.0** | 2.5 ms | 7.9 ms |
+| Sarbon G | 8.7M | 89.1 | 68.0 | 89.6 / 88.6 | 71.0 | **1.7 ms** | 3.7 ms |
+| RailSafe YOLO26n | 2.4M | 89.4 | 65.7 | 89.8 / 89.0 | 11.4 | 3.0 ms | **2.9 ms** |
+
+TensorRT fp16, 1088x1088, RTX 5090; v0.3 va G bitta jarayonda navbatma-navbat o'lchandi, YOLO26n
+RailSafe env'ida (TRT 10.15) oldinroq. G v0.3 dan 2.1x tez (b6), lekin -1.9 AP: qabul qoidasi
+(≤ 1 AP) bajarilmadi, shuning uchun v0.3 asosiy model bo'lib qoladi, G esa tezkor nomzod
+(`weights/sarbon-s-railsafe-light-1088.pt`). YOLO26n bilan teng (-0.3 AP, kichik obyektlarda +2.3,
+domen tashqarisida 71 ga qarshi 11), b1 da tezroq, b6 da 25% sekinroq.
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta
