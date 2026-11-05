@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 
 BINS = (12, 4, 2)  # hue, saturation, value
+SAMPLE = 64  # crops are subsampled to about this many pixels on their long side
+UNIFORM = np.full(2 * int(np.prod(BINS)), 1.0 / (2 * np.prod(BINS)), np.float32)  # "no colour information"
 
 
 def color_descriptor(frame_bgr, box):
@@ -18,10 +20,13 @@ def color_descriptor(frame_bgr, box):
     x0, x1 = max(0, x0), min(w, x1)
     y0, y1 = max(0, y0), min(h, y1)
     if x1 - x0 < 2 or y1 - y0 < 4:
-        return np.full(2 * np.prod(BINS), 1.0 / (2 * np.prod(BINS)), np.float32)
+        return UNIFORM.copy()
     # shrink horizontally: box edges are mostly background
     m = (x1 - x0) // 6
-    crop = cv2.cvtColor(frame_bgr[y0:y1, x0 + m:x1 - m or x1], cv2.COLOR_BGR2HSV)
+    crop = frame_bgr[y0:y1, x0 + m:x1 - m or x1]
+    # large boxes: every k-th pixel is the same histogram for a fraction of the cost
+    k = max(1, max(crop.shape[:2]) // SAMPLE)
+    crop = cv2.cvtColor(np.ascontiguousarray(crop[::k, ::k]), cv2.COLOR_BGR2HSV)
     mid = crop.shape[0] // 2
     out = []
     for part in (crop[: mid], crop[mid:]):

@@ -792,6 +792,32 @@ RailSafe env'ida (TRT 10.15) oldinroq. G v0.3 dan 2.1x tez (b6), lekin -1.9 AP: 
 (`weights/sarbon-s-railsafe-light-1088.pt`). YOLO26n bilan teng (-0.3 AP, kichik obyektlarda +2.3,
 domen tashqarisida 71 ga qarshi 11), b1 da tezroq, b6 da 25% sekinroq.
 
+**Pipeline CPU qismi (2026-11-05).** G bilan 6 kamerada qadamning ~80% i CPU'da edi: rang
+gistogrammasi ~16 ms, treker ~17 ms, natijalarni yig'ish ~8 ms, neyron tarmoq esa ~5 ms. O'zgarishlar:
+- rang faqat treker ishlatadigan box'lar uchun hisoblanadi (score >= `high`); 2-bosqich (past score,
+  faqat IoU) trek rangini yangilamaydi, chunki bu box'lar ko'pincha to'silgan bo'ladi;
+- katta box'lar gistogrammadan oldin ~64 px gacha siyraklashtiriladi;
+- kadrlar qayta ishlatiladigan pinned buferga bitta nusxa bilan yoziladi (`np.stack` + `pin_memory` o'rniga);
+- `inv2` slice'lardan `np.stack` qilmasdan to'ldiriladi; har kadrda CUDA tensor yaratilmaydi;
+  label qidirish vektorlashtirildi.
+
+A/B (`bench_step.py`, pereezd yozuvlari, G, CUDA graph, fonda o'qitish ishlab turgan holda):
+
+| Kamera | Oldin | Keyin | Treklar/kadr (oldin / keyin) |
+|---|---|---|---|
+| 2 | 21.1 ms | **13.3 ms** | 21.28 / 21.25 |
+| 3 | 29.6 ms | **17.0 ms** | 20.27 / 20.25 (noyob ID 192 / 192) |
+| 6 | 52.2 ms | **31.2 ms** | 20.27 / 20.25 |
+
+Keyingi qadamlar: GPU va CPU'ni ustma-ust ishlatish (bir qadam kechikish evaziga GPU kutishini
+yashirish), trekerlarni alohida jarayonlarga chiqarish.
+
+**G distillatsiyasi (o'qitilmoqda).** v0.3 o'qituvchi, psevdo-belgilar `tools/pseudo_label.py` bilan
+(1088, score >= 0.5): pereezd to'plamiga odam, velosiped va mototsikl qo'shildi (`C:/data/pereezd_plus`:
+10016 odam), yozuvlardan har 2 s da kadr olindi (`C:/data/pereezd_pseudo`: 2705 + 301 kadr). Poyezd sinfi
+chiqarildi: o'qituvchi o'tayotgan poyezdning faqat ayrim vagonlarini topadi. Config
+`railsafe_light_distill.yaml`, G'ning pereezd modelidan boshlanadi.
+
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
 Savol: kamera kadrini qachon hisoblash, qachon trekerning bashoratiga ishonish kerak? Sinov: 5 ta

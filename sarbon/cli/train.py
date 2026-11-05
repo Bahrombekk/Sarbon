@@ -83,7 +83,7 @@ def main():
     add_arch_args(ap)
     ap.add_argument("--tag", default="", help="suffix for the output folder (ablations)")
     ap.add_argument("--init", help="pretrained weights: distillation output or a detector checkpoint")
-    ap.add_argument("--init-classes", choices=["surveillance"],
+    ap.add_argument("--init-classes", choices=["surveillance", "railsafe"],
                     help="class list of the --init detector; its class heads are then remapped by name")
     ap.add_argument("--taxonomy", default="surveillance", choices=["surveillance", "railsafe"])
     ap.add_argument("--yolo", help="folder with train.txt / val.txt (make_yolo_split.py) of own labelled data")
@@ -156,9 +156,10 @@ def main():
                   block_type=args.block, act=args.act, **arch).to(device)
     print(f"Sarbon-{args.size.upper()}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params")
     if args.init:
-        src = SURVEILLANCE if args.init_classes == "surveillance" else None
+        src = {"surveillance": SURVEILLANCE, "railsafe": RAILSAFE}.get(args.init_classes)
         # RailSafe classes start from their nearest COCO class (car -> yengil, truck -> og'ir)
-        n, rows = load_init(model, args.init, src, names, alias={"yengil": "car", "ogir": "truck"})
+        alias = {"yengil": "car", "ogir": "truck"} if args.init_classes == "surveillance" else None
+        n, rows = load_init(model, args.init, src, names, alias=alias)
         print(f"init from {args.init}: {n} tensors, {rows} class rows remapped"
               + ("" if src else "; class heads start fresh"))
     crit = SetCriterion(num_classes, HungarianMatcher(w_nwd=args.nwd), project=model.project)

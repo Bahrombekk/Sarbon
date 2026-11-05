@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from ..models.box_ops import cxcywh_to_xyxy
 from ..sparse.convert import stem_to_local
 from ..track import SarbonTracker, TrackerConfig
-from ..track.appearance import color_descriptor
+from ..track.appearance import UNIFORM, color_descriptor
 
 MEAN = np.array([0.485, 0.456, 0.406], np.float32) * 255
 STD = np.array([0.229, 0.224, 0.225], np.float32) * 255
@@ -77,9 +77,22 @@ class SarbonVideo:
         The uint8 frames are uploaded as they are; BGR->RGB, the bilinear resize (half-pixel
         centres, as cv2.INTER_LINEAR) and the normalisation run on the device. On the CPU this
         was a quarter of a 6-camera step (resize + reversed-stride copy + float conversion)."""
-        x = torch.from_numpy(np.stack(frames))
         if self.dev.type == "cuda":
-            x = x.pin_memory().to(self.dev, non_blocking=True)
+            # frames are copied once, straight into a reused pinned buffer (np.stack + pin_memory
+            # copied every frame twice and allocated pinned memory each step)
+            shape = (len(frames), *frames[0].shape)
+            if getattr(self, "_pinned", None) is None or self._pinned.shape != shape:
+                self._pinned = torch.empty(shape, dtype=torch.uint8).pin_memory()
+                self._pinned_np = self._pinned.numpy()
+            else:
+                self._upload_done.synchronize()  # the previous upload has left the buffer
+            for k, f in enumerate(frames):
+                self._pinned_np[k] = f
+            x = self._pinned.to(self.dev, non_blocking=True)
+            self._upload_done = torch.cuda.Event()
+            self._upload_done.record()
+        else:
+            x = torch.from_numpy(np.stack(frames))
         x = x.flip(-1).permute(0, 3, 1, 2).float()
         if x.shape[-2:] != (self.h, self.w):
             x = F.interpolate(x, (self.h, self.w), mode="bilinear", align_corners=False)
@@ -159,8 +172,9 @@ class SarbonVideo:
         s_all, lab_all = out["pred_logits"].float().sigmoid().max(-1)
         s_all, idx = s_all.topk(min(self.max_dets, s_all.shape[1]), -1)
         take = lambda t: t.gather(1, idx.view(*idx.shape, *[1] * (t.dim() - 2)).expand(*idx.shape, *t.shape[2:]))
-        boxes_all = cxcywh_to_xyxy(take(out["pred_boxes"].float())) * torch.tensor(
-            [self.w, self.h, self.w, self.h], device=self.dev)
+        if getattr(self, "_whwh", None) is None:
+            self._whwh = torch.tensor([self.w, self.h, self.w, self.h], device=self.dev, dtype=torch.float32)
+        boxes_all = cxcywh_to_xyxy(take(out["pred_boxes"].float())) * self._whwh
         host = [t.cpu().numpy() for t in (s_all, take(lab_all), boxes_all, take(out.get("id_embed", out["embed"]).float()))]
 
         def camera(i):
@@ -170,12 +184,19 @@ class SarbonVideo:
             keep = sc >= self.keep_score  # sorted by score already
             sc, lb, emb = sc[keep], lb[keep], emb[keep]
             boxes = boxes[keep] * np.r_[scale, scale]
-            col = np.stack([color_descriptor(frames[i], b) for b in boxes]) if self.use_color and len(boxes) else None
+            col = None
+            if self.use_color and len(boxes):
+                # the tracker reads colour only for boxes above its high threshold (stage 2 is IoU only)
+                hi = self.trackers[i].cfg.high
+                col = np.tile(UNIFORM, (len(boxes), 1))
+                for k in np.flatnonzero(sc >= hi):
+                    col[k] = color_descriptor(frames[i], boxes[k])
             tracks = self.trackers[i].update(boxes, sc, emb, col, steps[i])
             res = []
-            for tid, box, score, ground in tracks:
-                j = int(np.argmin(np.abs(boxes - box).sum(1))) if len(boxes) else -1
-                label = int(lb[j]) if j >= 0 else -1
+            near = (np.abs(np.array([t[1] for t in tracks])[:, None] - boxes[None]).sum(-1).argmin(1)
+                    if len(tracks) and len(boxes) else None)
+            for k, (tid, box, score, ground) in enumerate(tracks):
+                label = int(lb[near[k]]) if near is not None else -1
                 res.append({"id": tid, "box": box, "score": float(score),
                             "label": self.class_names[label] if self.class_names and label >= 0 else label,
                             "ground": None if ground is None else ground.tolist()})

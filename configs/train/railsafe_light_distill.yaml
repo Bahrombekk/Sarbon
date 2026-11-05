@@ -1,0 +1,39 @@
+# Distil v0.3 (weights/sarbon-s-railsafe-1088.pt) into the light network G through pseudo-labels
+# (tools/pseudo_label.py, teacher at 1088, score >= 0.5). Starts from G's own crossing model
+# (railsafe_light_1088.yaml, 89.1 AP on YOLO26n's val; v0.3 91.0), same input size and batch.
+#   C:/data/pereezd_plus  : the crossing set of railsafe_light_1088.yaml (pereezd_dataset's own
+#                           train/val, original yengil/og'ir labels) + teacher person, bicycle,
+#                           motorcycle (and train, unused here), which that set never annotated
+#   C:/data/pereezd_pseudo: frames every 2 s from 5 recordings (C:/data/recordings, 2026-10-29),
+#                           all classes from the teacher; last 10% of each video = val
+# Both use our label ids directly (identity map). The teacher's train class is left out: it boxes only
+# some wagons of a passing train, and half-labelled trains would teach the student to miss them.
+# Judged on the original val with eval_light.py.
+coco: C:/data/coco
+taxonomy: railsafe
+yolo: C:/data/pereezd_plus
+yolo_map: "0:0,1:1,2:2,3:3,4:4"
+own:
+  - C:/data/pereezd_pseudo=0:0,1:1,2:2,3:3,4:4
+init: runs/railsafe/s_railsafe_light_1088/best.pt
+init_classes: railsafe
+size: s
+widths: "32,64,128"
+depths: "1,1"
+c16: 256
+hidden: 192
+heads: 6
+ffn: 768
+dec_layers: 3
+queries: 150
+img: 1088
+epochs: 15
+no_aug_epochs: 2
+lr: 1.0e-4
+batch: 8
+workers: 12
+no_halo_zero: true
+eval_every: 1
+tag: _railsafe_light_distill
+out: runs/railsafe
+resume: true

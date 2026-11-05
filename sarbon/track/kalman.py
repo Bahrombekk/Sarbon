@@ -12,9 +12,11 @@ _STD_POS, _STD_VEL = 1.0 / 20, 1.0 / 160
 def inv2(s):
     """Closed-form inverse of a batch of 2x2 matrices [..., 2, 2]."""
     det = s[..., 0, 0] * s[..., 1, 1] - s[..., 0, 1] * s[..., 1, 0]
-    out = np.stack([np.stack([s[..., 1, 1], -s[..., 0, 1]], -1),
-                    np.stack([-s[..., 1, 0], s[..., 0, 0]], -1)], -2)
-    return out / det[..., None, None]
+    out = np.empty_like(s)  # filled in place: np.stack of 4 slices cost more than the maths
+    out[..., 0, 0], out[..., 0, 1] = s[..., 1, 1], -s[..., 0, 1]
+    out[..., 1, 0], out[..., 1, 1] = -s[..., 1, 0], s[..., 0, 0]
+    out /= det[..., None, None]
+    return out
 
 
 def inv4(s):

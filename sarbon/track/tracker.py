@@ -314,10 +314,11 @@ class SarbonTracker:
             return (boxes[idx], scores[idx], None if feats is None else feats[idx],
                     None if colors is None else colors[idx], None if geo is None else [geo[k] for k in idx])
 
-        def apply(ts, idx, matches):
+        def apply(ts, idx, matches, color=True):
             if not matches:
                 return
             b, s, f, c, g = sub(idx)
+            c = c if color else None
             filt = self._filter_batch([ts[i] for i, _ in matches], [j for _, j in matches], b, s, g)
             for k, (i, j) in enumerate(matches):
                 gm = None if g is None else (g[j][0], g[j][1])
@@ -335,7 +336,7 @@ class SarbonTracker:
         rest = [confirmed[i] for i in ut if confirmed[i].state != TRACKED]
         b = boxes[lo]
         m2, ut2, _ = assign(1 - iou_matrix(np.array([t.box for t in cand]).reshape(-1, 4), b), 0.5)
-        apply(cand, lo, m2)
+        apply(cand, lo, m2, color=False)  # low-score boxes are often occluded: keep the colour model
         unmatched = [cand[i] for i in ut2] + rest
         if cfg.ocr and len(unmatched) and len(rem_hi):
             m3, ut3, ud3 = assign(self._cost(unmatched, *sub(rem_hi), False, use_last=True), 0.5)
