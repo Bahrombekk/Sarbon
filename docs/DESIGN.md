@@ -784,6 +784,7 @@ Shundan keyin `train.py` checkpoint'ni fsync qilib yozadi va oldingisini `ckpt.p
 |---|---|---|---|---|---|---|---|
 | Sarbon v0.3 | 18.5M | **91.0** | **71.7** | 90.9 / 91.1 | **74.0** | 2.5 ms | 7.9 ms |
 | Sarbon G | 8.7M | 89.1 | 68.0 | 89.6 / 88.6 | 71.0 | **1.7 ms** | 3.7 ms |
+| Sarbon G + distill | 8.7M | 89.8 | 70.6 | 89.9 / 89.8 | 71.5 | **1.7 ms** | 3.7 ms |
 | RailSafe YOLO26n | 2.4M | 89.4 | 65.7 | 89.8 / 89.0 | 11.4 | 3.0 ms | **2.9 ms** |
 
 TensorRT fp16, 1088x1088, RTX 5090; v0.3 va G bitta jarayonda navbatma-navbat o'lchandi, YOLO26n
@@ -812,11 +813,16 @@ A/B (`bench_step.py`, pereezd yozuvlari, G, CUDA graph, fonda o'qitish ishlab tu
 Keyingi qadamlar: GPU va CPU'ni ustma-ust ishlatish (bir qadam kechikish evaziga GPU kutishini
 yashirish), trekerlarni alohida jarayonlarga chiqarish.
 
-**G distillatsiyasi (o'qitilmoqda).** v0.3 o'qituvchi, psevdo-belgilar `tools/pseudo_label.py` bilan
+**G distillatsiyasi (2026-11-05).** v0.3 o'qituvchi, psevdo-belgilar `tools/pseudo_label.py` bilan
 (1088, score >= 0.5): pereezd to'plamiga odam, velosiped va mototsikl qo'shildi (`C:/data/pereezd_plus`:
 10016 odam), yozuvlardan har 2 s da kadr olindi (`C:/data/pereezd_pseudo`: 2705 + 301 kadr). Poyezd sinfi
 chiqarildi: o'qituvchi o'tayotgan poyezdning faqat ayrim vagonlarini topadi. Config
-`railsafe_light_distill.yaml`, G'ning pereezd modelidan boshlanadi.
+`railsafe_light_distill.yaml`, G'ning pereezd modelidan boshlanadi, 15 epoxa (9-epoxadan keyin
+DataLoader worker'lari yiqildi, checkpoint'dan davom etdi). Oxirgi epoxa eng yaxshisi: YOLO26n val
+89.1 → **89.8** AP (kichik 68.0 → 70.6, og'ir 88.6 → 89.8), Open Images 71.0 → 71.5. v0.3 bilan farq
+1.9 → 1.2 AP: qabul qoidasi (≤ 1 AP) hali bajarilmadi. YOLO26n'dan +0.4 AP, kichik obyektlarda +4.9.
+Odam/velosiped uchun mustaqil belgilangan val yo'q (psevdo val'da 69.6 → 73-75, o'qituvchi belgilari).
+Og'irliklar: `weights/sarbon-s-railsafe-light-distill.pt`.
 
 ### Hisoblash scheduler'i (Perception Debt v0): o'lchangan, salbiy natija (2026-11-02)
 
