@@ -27,8 +27,8 @@ import torch
 from torch.utils.data import ConcatDataset, DataLoader
 
 from ..config import parse_with_config
-from ..data.coco import (ALL, RAILSAFE, RAILSAFE_FROM_COCO, SURVEILLANCE, CocoDetection,
-                         MosaicDetection, SyntheticDetection, collate)
+from ..data.coco import (ALL, RAILSAFE, RAILSAFE_FROM_COCO, SAFEZONE, SAFEZONE_FROM_COCO, SURVEILLANCE,
+                         CocoDetection, MosaicDetection, SyntheticDetection, collate)
 from ..data.yolo import WithClassMask, YoloDetection
 from ..engine import ModelEMA, add_arch_args, arch_overrides, load_init, param_groups, prep, to_targets
 from ..evaluation import evaluate
@@ -85,7 +85,7 @@ def main():
     ap.add_argument("--init", help="pretrained weights: distillation output or a detector checkpoint")
     ap.add_argument("--init-classes", choices=["surveillance", "railsafe"],
                     help="class list of the --init detector; its class heads are then remapped by name")
-    ap.add_argument("--taxonomy", default="surveillance", choices=["surveillance", "railsafe"])
+    ap.add_argument("--taxonomy", default="surveillance", choices=["surveillance", "railsafe", "safezone"])
     ap.add_argument("--yolo", help="folder with train.txt / val.txt (make_yolo_split.py) of own labelled data")
     ap.add_argument("--yolo-map", default="0:3,1:4", help="YOLO class -> our label (railsafe: yengil, ogir)")
     ap.add_argument("--own", action="append", default=[], metavar="SPLIT=MAP",
@@ -113,19 +113,23 @@ def main():
             kw = {"classes": ALL}
         elif args.taxonomy == "railsafe":
             kw, names = {"class_map": RAILSAFE_FROM_COCO}, RAILSAFE
+        elif args.taxonomy == "safezone":
+            kw, names = {"class_map": SAFEZONE_FROM_COCO}, SAFEZONE
         else:
             kw, names = {"classes": SURVEILLANCE}, SURVEILLANCE
         base = CocoDetection(args.coco, "train2017", size, commercial_only=not args.benchmark,
                              limit=args.limit, **kw)
         val_ds = CocoDetection(args.coco, "val2017", size, commercial_only=False, train=False,
                                limit=args.limit, **kw)
-        num_classes = base.num_classes
+        # the taxonomy may have classes COCO never annotates (SafeZone helmets): size heads by names
+        num_classes = len(names) if names else base.num_classes
+        coco_classes = sorted(set(base.label_of.values()))
         mosaics = [MosaicDetection(base, prob=0.5)]
         train_ds = mosaics[0]
         # own labelled data sets: each annotates only its mapped classes (partial labels)
         sources = ([("own", args.yolo, args.yolo_map)] if args.yolo else []) + [
             (Path(s.split("=", 1)[0]).name.removesuffix("_split"), *s.split("=", 1)) for s in args.own]
-        parts = [WithClassMask(mosaics[0], num_classes, range(num_classes))]
+        parts = [WithClassMask(mosaics[0], num_classes, coco_classes)]
         for name, split, cmap in sources:
             ymap = {int(a): int(b) for a, b in (p.split(":") for p in cmap.split(","))}
             ytrain = YoloDetection(Path(split) / "train.txt", size, ymap, limit=args.limit)

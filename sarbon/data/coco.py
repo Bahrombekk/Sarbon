@@ -20,6 +20,9 @@ ALL = None  # every COCO category (research benchmark against published numbers)
 # RailSafe crossing classes; COCO names mapped onto them (bus and truck are both "og'ir")
 RAILSAFE = ["person", "bicycle", "motorcycle", "yengil", "ogir", "train"]
 RAILSAFE_FROM_COCO = {"person": 0, "bicycle": 1, "motorcycle": 2, "car": 3, "bus": 4, "truck": 4, "train": 5}
+# SafeZone (SmartGUI) helmet classes; COCO only annotates person, the helmet classes come from own data
+SAFEZONE = ["person", "helmet", "no_helmet"]
+SAFEZONE_FROM_COCO = {"person": 0}
 
 
 def letterbox(img, size):

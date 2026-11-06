@@ -1,0 +1,30 @@
+# SafeZone (SmartGUI shlem) yengil modeli: light network G (8.7M), 1024 px, sinflar person / helmet / no_helmet.
+# Ma'lumot: tools/safezone_split.py -> C:/data/safezone (smart_v4_1024: train asl + 3x3 mozaika, val, test).
+# COCO (tijoriy litsenziyali rasmlar) faqat odamni beradi: shlem sinflari loss'dan maskalanadi.
+# Init: G'ning DINOv2 backbone'i (runs/pretrain/s_light_distill.pt), detektor boshi yangidan.
+# s_light_person ishlatilmaydi: u eski smart_1024 train'ni ko'rgan, unda v4 test kadrlarining 85% i
+# pikselma-piksel bor edi; shunda test YOLO helmet_v4 bilan teng bo'lmasdi.
+coco: C:/data/coco
+taxonomy: safezone
+yolo: C:/data/safezone
+yolo_map: "0:0,1:1,2:2"
+init: runs/pretrain/s_light_distill.pt
+size: s
+widths: "32,64,128"
+depths: "1,1"
+c16: 256
+hidden: 192
+heads: 6
+ffn: 768
+dec_layers: 3
+queries: 150
+img: 1024
+epochs: 40
+no_aug_epochs: 3
+batch: 8
+workers: 12
+no_halo_zero: true
+eval_every: 2
+tag: _safezone_light_1024
+out: runs/safezone
+resume: true

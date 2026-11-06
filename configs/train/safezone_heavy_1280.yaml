@@ -1,0 +1,26 @@
+# SafeZone (SmartGUI shlem) og'ir modeli: wide backbone (v0.3 arxitekturasi, 18.5M), 1280 px.
+# Vazifasi: yengil model topgan buzilishlarni (no_helmet) qayta tekshirish, ya'ni ikkinchi fikr.
+# Ma'lumot va sinflar safezone_light_1024.yaml bilan bir xil.
+# Init: s_wide_distill (faqat tijoriy COCO, 6 sinf; person qatori nom bo'yicha ko'chiriladi).
+# s_wide_person ishlatilmaydi: u eski smart_1024 train'ni ko'rgan (v4 test kadrlarining 85% i).
+coco: C:/data/coco
+taxonomy: safezone
+yolo: C:/data/safezone
+yolo_map: "0:0,1:1,2:2"
+init: runs/sarbon/s_wide_distill/best.pt
+init_classes: surveillance
+size: s
+widths: "48,96,192"
+depths: "2,3"
+c16: 384
+img: 1280
+epochs: 24
+no_aug_epochs: 2
+lr: 1.4e-4
+batch: 8
+workers: 12
+no_halo_zero: true
+eval_every: 2
+tag: _safezone_heavy_1280
+out: runs/safezone
+resume: true
