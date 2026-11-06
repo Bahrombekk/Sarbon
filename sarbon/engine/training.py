@@ -61,15 +61,21 @@ class ModelEMA:
         for p in self.ema.parameters():
             p.requires_grad_(False)
         self.decay, self.warmup, self.updates = decay, warmup, 0
+        self._pairs = None  # (model, ema tensors, model tensors): floating-point state, cached
 
     @torch.no_grad()
     def update(self, model):
         self.updates += 1
         d = self.decay * (1 - math.exp(-self.updates / self.warmup))
-        msd = model.state_dict()
-        for k, v in self.ema.state_dict().items():
-            if v.dtype.is_floating_point:
-                v.mul_(d).add_(msd[k].detach(), alpha=1 - d)
+        # tensors are updated in place (optimizer, BN, load_state_dict), so the references stay valid;
+        # one multi-tensor op instead of ~1000 small kernels per step
+        if self._pairs is None or self._pairs[0] is not model:
+            msd, esd = model.state_dict(), self.ema.state_dict()
+            keys = [k for k, v in esd.items() if v.dtype.is_floating_point]
+            self._pairs = model, [esd[k] for k in keys], [msd[k].detach() for k in keys]
+        _, e, m = self._pairs
+        torch._foreach_mul_(e, d)
+        torch._foreach_add_(e, m, alpha=1 - d)
 
 
 def param_groups(model, wd):

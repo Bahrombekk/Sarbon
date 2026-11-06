@@ -38,11 +38,15 @@ class HungarianMatcher(nn.Module):
         (track queries). Queries [0, skip) are excluded from the Hungarian step.
         Returns per-image (query_idx, gt_idx) CPU LongTensors.
         """
+        c = self.cost(logits, boxes, targets, skip)
+        return self.assign(None if c is None else c.cpu(), targets, logits.shape[0], fixed, skip)
+
+    @torch.no_grad()
+    def cost(self, logits, boxes, targets, skip=0):
+        """Cost matrix [B, Q - skip, N_total] on the device, or None when there is nothing to match."""
         b, q, _ = logits.shape
-        sizes = [len(t["labels"]) for t in targets]
-        fixed = fixed or [(EMPTY, EMPTY)] * b
-        if sum(sizes) == 0 or q == skip:
-            return [(fq.cpu(), fg.cpu()) for fq, fg in fixed]
+        if sum(len(t["labels"]) for t in targets) == 0 or q == skip:
+            return None
         lab = torch.cat([t["labels"] for t in targets])
         gtb = torch.cat([t["boxes"] for t in targets]).float()
         p = logits[:, skip:].flatten(0, 1).float().sigmoid()
@@ -54,7 +58,15 @@ class HungarianMatcher(nn.Module):
         c = c - self.w_giou * generalized_box_iou(cxcywh_to_xyxy(pb), cxcywh_to_xyxy(gtb))
         if self.w_nwd:
             c = c + self.w_nwd * (1 - nwd(pb, gtb, self.nwd_c))
-        c = c.view(b, q - skip, -1).cpu()
+        return c.view(b, q - skip, -1).float()
+
+    @staticmethod
+    def assign(c, targets, b, fixed=None, skip=0):
+        """Hungarian step on a CPU cost matrix from cost(); c None -> only the fixed pairs."""
+        sizes = [len(t["labels"]) for t in targets]
+        fixed = fixed or [(EMPTY, EMPTY)] * b
+        if c is None:
+            return [(fq.cpu(), fg.cpu()) for fq, fg in fixed]
         out, start = [], 0
         for i, n in enumerate(sizes):
             fq, fg = fixed[i][0].cpu(), fixed[i][1].cpu()
@@ -201,24 +213,35 @@ class SetCriterion(nn.Module):
             for k, v in parts.items():
                 total = total + self.w[k] * v
                 if log:
-                    logs[k] = v.item()
+                    logs[k] = v.detach()
             return flat, iou
 
         final = {k: out[k] for k in ("pred_logits", "pred_boxes", "pred_corners") if k in out}
         ref_init = out.get("ref_init")
-        final_matches = self.matcher(final["pred_logits"], final["pred_boxes"], targets, fixed, skip)
-        for o in out["aux"]:
-            run(o, self.matcher(o["pred_logits"], o["pred_boxes"], targets, fixed, skip), n_norm, ref_init)
+        enc = {"pred_logits": out["enc_logits"], "pred_boxes": out["enc_boxes"]}
+        # every Hungarian step of this batch from one device->host copy (one sync, not one per layer)
+        heads = [(final, fixed, skip), *[(o, fixed, skip) for o in out["aux"]]]
+        if "pre" in out:
+            heads.append((out["pre"], fixed, skip))
+        heads.append((enc, None, 0))
+        costs = [self.matcher.cost(o["pred_logits"], o["pred_boxes"], targets, s) for o, _, s in heads]
+        dense = [c for c in costs if c is not None]
+        host = torch.cat([c.flatten() for c in dense]).cpu().split([c.numel() for c in dense]) if dense else []
+        host, matches = iter(host), []
+        for c, (o, fx, s) in zip(costs, heads):
+            hc = None if c is None else next(host).view(c.shape)
+            matches.append(self.matcher.assign(hc, targets, o["pred_logits"].shape[0], fx, s))
+        final_matches, aux_matches = matches[0], matches[1:1 + len(out["aux"])]
+        for o, m in zip(out["aux"], aux_matches):
+            run(o, m, n_norm, ref_init)
         flat, iou = run(final, final_matches, n_norm, ref_init, log=True)
         if "pred_corners" in final and len(out["aux"]) and iou is not None:
             ddf = self._ddf(out["aux"], final, flat, iou, n_norm)
             total = total + self.w["ddf"] * ddf
-            logs["ddf"] = ddf.item()
+            logs["ddf"] = ddf.detach()
         if "pre" in out:  # pre-box layer
-            run(out["pre"], self.matcher(out["pre"]["pred_logits"], out["pre"]["pred_boxes"], targets,
-                                         fixed, skip), n_norm)
-        enc = {"pred_logits": out["enc_logits"], "pred_boxes": out["enc_boxes"]}
-        run(enc, self.matcher(enc["pred_logits"], enc["pred_boxes"], targets), n_norm)
+            run(out["pre"], matches[1 + len(out["aux"])], n_norm)
+        run(enc, matches[-1], n_norm)
         if "dn" in out:  # denoising: assignments are known, no matching
             dn = out["dn"]
             norm = n_norm * dn["groups"]
@@ -226,5 +249,9 @@ class SetCriterion(nn.Module):
             for o in [*dn["aux"], {k: dn[k] for k in ("pred_logits", "pred_boxes", "pred_corners")}]:
                 run(o, dn["matches"], norm, dn["ref_init"])
             run(dn["pre"], dn["matches"], norm)
-            logs["dn"] = float(total - before) if not torch.is_tensor(total) else (total - before).item()
-        return total, logs, final_matches
+            logs["dn"] = (total - before).detach() if torch.is_tensor(total) else torch.tensor(float(total - before))
+        # log values as Python floats, read back in one sync
+        keys = list(logs)
+        vals = torch.stack([torch.as_tensor(logs[k], dtype=torch.float32, device=dev).reshape(())
+                            for k in keys]).tolist() if keys else []
+        return total, dict(zip(keys, vals)), final_matches
